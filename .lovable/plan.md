@@ -1,0 +1,117 @@
+# Plan: Bot Power-Up Priority + Football Stadium Mode
+
+This is a large, two-part change. Below is the scope, design, and file-by-file breakdown.
+
+---
+
+## Part 1 — Bot Power-Up Priority (Mars mode)
+
+**Goal:** Bots treat power-ups as the highest-priority target, never crowd doors, and use Builder Block defensively in front of enemies.
+
+### Behavior changes (in `src/game/engine.ts` bot AI loop)
+1. New priority order per tick:
+   - **Builder Block in inventory + enemy in vision** → drop block between self and enemy, then flee.
+   - **Visible / known power-up** → navigate to nearest bubble.
+   - **Role objective** (Imposter kill, Shooter shoot, Protector arrest, Crewmate task).
+   - **Patrol** (default wander).
+2. **Door coordination:** track `doorOpenerByBotId` map. If another bot is already opening a door, skip that door and pick an alternate route or wait.
+3. **Power-up memory:** when a bubble enters any bot's vision, store its `(id, x, y)` in a shared `knownPowerUps` set. Cleared when collected or expired.
+
+No new files; logic lives inside the existing bot decision function.
+
+---
+
+## Part 2 — Football Stadium Mode
+
+### Map selection
+- Add `mapMode: "mars" | "football"` to game settings in `src/components/LobbyScreen.tsx` (new dropdown above existing customization).
+- Add `matchRounds: 3 | 5 | 10` selector, visible only when `mapMode === "football"`.
+- Pass through to `Index.tsx` → engine init.
+
+### New file: `src/game/footballMap.ts`
+- Field dimensions match Mars map width (2000px wide, ~1400 tall to mirror image ratio).
+- Top-down green pitch with white line markings: outer boundary, halfway line, center circle + dot, two penalty boxes, two goal areas, two goals (top + bottom).
+- Export `FOOTBALL_WALLS` (outer boundary + goal posts), `GOAL_TOP`, `GOAL_BOTTOM` rects, `CENTER_SPAWN`.
+
+### New file: `src/game/football.ts`
+- `Ball` interface: `{ x, y, vx, vy, radius: 18 }`.
+- Physics: friction 0.985/tick, max speed cap, wall bounce (reflect), goal-post bounce.
+- `updateBall(ball, players, walls)`:
+  - Move ball by velocity, apply friction.
+  - Circle-vs-circle collision with each player → transfer momentum (ball.vx/vy = player movement vector × forceMultiplier; if player carries Power-Shot buff, multiplier ×2.2).
+  - Goal detection → return `"top" | "bottom" | null`.
+- `resetPositions(players, ball)` → ball to center, players to team-spawn grid.
+
+### Engine integration (`src/game/engine.ts`)
+- Branch at the top of `update()`:
+  - `if (state.mode === "football") runFootballTick()` (skip task/role/kill/shoot/jail logic entirely).
+  - Else existing Mars logic.
+- Football tick:
+  - Move players (keep WASD/arrow controls + mobile joystick — same movement code).
+  - Disable: kills, shots, tasks, arrests, vision fog.
+  - Update ball, check goals → increment `state.score.red/blue`, play goal sound, call `resetPositions`, decrement `roundsRemaining`.
+  - When `roundsRemaining === 0` → emit `gameOver` with winning team.
+- **Teams:** force exactly 12 players (6 red + 6 blue) regardless of lobby player count; bots fill empty slots.
+
+### Bot AI for football (in engine, separate function `footballBotTick`)
+Priority:
+1. **Defensive goal block** — if ball is moving toward own goal and bot is the closest defender, intercept path.
+2. **Power-up** in vision → grab it.
+3. **Ball possession** — if ball is in opponent's possession (closest enemy < ball radius), move to tackle (push into them).
+4. **Attack** — move to ball with an offset on opposite side of opponent goal (so collision sends ball toward goal).
+
+### Power-ups in football mode
+- Speed Bubble: same as Mars (5s speed boost).
+- Builder Block: same placement, but block also reflects the ball.
+- **Health Aura → Power-Shot Aura** (football only): single-use buff; next ball collision applies ×2.2 force multiplier, then consumed.
+
+### Rendering (`src/game/renderer.ts`)
+- New `drawFootballField(ctx)` — green pitch, white lines, center circle, penalty boxes, goals.
+- New `drawBall(ctx, ball)` — white circle with black pentagons (procedural, matches reference image style; no asset load needed).
+- New `drawScoreboard(ctx, state)` — top-center HUD: `RED 2 — 1 BLUE · Round 3/5`.
+- Branch in main render: `if (state.mode === "football") drawFootballField else drawMarsSurface…`.
+- Skip vision fog rendering in football mode.
+
+### Player visuals
+- In football mode, color players strictly by team: red team = red suit, blue team = blue suit. Reuse existing directional animation frames (left/right/top/bottom) — no new sprites.
+
+### Audio
+- Reuse existing power-up pickup sound for goal "tune" with a higher pitch / cheer overlay (simple WebAudio oscillator burst — no new asset).
+
+### Types (`src/game/types.ts`)
+- Extend `GameState` with `mode: "mars" | "football"`, `ball?: Ball`, `score?: {red:number; blue:number}`, `roundsRemaining?: number`, `totalRounds?: number`.
+- Extend `Player` with `team?: "red" | "blue"`, `powerShotCharges?: number`.
+
+### UI
+- `LobbyScreen.tsx`: add map selector + rounds selector.
+- `GameOverScreen.tsx`: handle football result ("Red wins 4-2!").
+- `GameCanvas.tsx`: pass new state to renderer; mobile controls keep only movement joystick (hide action buttons in football mode).
+
+---
+
+## Files Touched
+
+**New:**
+- `src/game/footballMap.ts`
+- `src/game/football.ts`
+
+**Modified:**
+- `src/game/types.ts` — mode, ball, score, team fields
+- `src/game/engine.ts` — power-up priority + door coordination (Mars), full football branch
+- `src/game/renderer.ts` — football field, ball, scoreboard, team colors
+- `src/components/LobbyScreen.tsx` — map + rounds selector
+- `src/components/GameCanvas.tsx` — pass new state, conditional controls
+- `src/components/MobileControls.tsx` — hide action buttons in football
+- `src/components/GameOverScreen.tsx` — football result text
+- `src/pages/Index.tsx` — thread new settings to engine
+
+---
+
+## Out of Scope (per your spec)
+- No new roles, tasks, jail, or kill mechanics in football.
+- No new sprites/images — ball and field are procedurally drawn.
+- Mars map and existing gameplay remain unchanged.
+
+---
+
+**Estimate:** ~6–8 file edits, ~600–900 lines of new/changed code. After approval I'll implement in one pass and verify the build.
