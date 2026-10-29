@@ -6,6 +6,8 @@ import LobbyScreen from '@/components/LobbyScreen';
 import GameSelectScreen from '@/components/GameSelectScreen';
 import FootballTimeScreen from '@/components/FootballTimeScreen';
 import { preloadReferee } from '@/game/preload';
+import VolleyballGame from '@/components/VolleyballGame';
+import VolleyballPointsScreen from '@/components/VolleyballPointsScreen';
 import RoleBanner from '@/components/RoleBanner';
 import GameOverScreen from '@/components/GameOverScreen';
 import LoadingScreen from '@/components/LoadingScreen';
@@ -14,7 +16,8 @@ import TutorialScreen from '@/components/TutorialScreen';
 export default function Index() {
   const [gameState, setGameState] = useState<GameState | null>(null);
   const [loading, setLoading] = useState(false);
-  const [screen, setScreen] = useState<'lobby' | 'games' | 'footballTime'>('lobby');
+  const [screen, setScreen] = useState<'lobby' | 'games' | 'footballTime' | 'volleyPoints'>('lobby');
+  const [volleyTarget, setVolleyTarget] = useState<number | null>(null);
   const [showTutorial, setShowTutorial] = useState(false);
   const [username, setUsername] = useState<string>('Astro');
   const [draftName, setDraftName] = useState<string>('');
@@ -53,10 +56,14 @@ export default function Index() {
 
   const handleRestart = useCallback(() => {
     setGameState(null);
+    setVolleyTarget(null);
     setScreen('games');
   }, []);
 
   if (loading) return <LoadingScreen />;
+  if (volleyTarget !== null) {
+    return <VolleyballGame key={volleyTarget} target={volleyTarget} playerName={username} onExit={handleRestart} />;
+  }
   if (!gameState && screen === 'games') {
     return (
       <GameSelectScreen
@@ -64,9 +71,13 @@ export default function Index() {
         onPlay={(g) => {
           if (g === 'mars') handleStart(MARS_SETTINGS);
           else if (g === 'football') setScreen('footballTime');
+          else if (g === 'volleyball') setScreen('volleyPoints');
         }}
       />
     );
+  }
+  if (!gameState && screen === 'volleyPoints') {
+    return <VolleyballPointsScreen onBack={() => setScreen('games')} onPick={(n) => setVolleyTarget(n)} />;
   }
   if (!gameState && screen === 'footballTime') {
     return (

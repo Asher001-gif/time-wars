@@ -1,0 +1,569 @@
+import { useEffect, useRef, useState } from 'react';
+import crewImg from '@/assets/char-crew-a.png';
+import DraggableExitButton from './DraggableExitButton';
+import RotateDevicePrompt from './RotateDevicePrompt';
+import { useIsMobileDevice, useIsPortrait } from '@/hooks/use-device';
+
+/* ===================== CONSTANTS (world is 1600 x 800) ===================== */
+const W = 1600, H = 800;
+const GROUND = 720;
+const NET_X = W / 2, NET_HALF = 8, NET_TOP = 500;
+const PR = 44;                  // player centre height above the ground when standing
+const BALL_R = 24;
+const G_P = 0.85;               // player gravity
+const G_B = 0.34;               // ball gravity
+const JUMP_V = -17.5;
+const MOVE = 6.2;               // human speed (medium)
+const BOT_MOVE = 5.8;
+const REACH = 105;              // how far a player can hit the ball
+const MAX_BALL_V = 17;
+const DT = 1000 / 60;
+const STAND_Y = GROUND - PR;
+
+const COLORS = { L: '#4a90d9', R: '#e03030' } as const;
+const NAMES = { L: 'BLUE', R: 'RED' } as const;
+
+type Side = 'L' | 'R';
+type Intent = 'set' | 'attack' | 'over';
+
+interface VPlayer {
+  id: number; side: Side; isHuman: boolean; name: string;
+  x: number; y: number; vx: number; vy: number; onGround: boolean;
+  facing: number; willMiss: boolean; react: number; wasInReach: boolean;
+}
+interface VBall { x: number; y: number; vx: number; vy: number; rot: number; side: Side; touches: number; lastHitter: number }
+interface VState {
+  players: VPlayer[]; ball: VBall;
+  score: { L: number; R: number };
+  phase: 'serve' | 'play' | 'point' | 'over';
+  t: number; until: number; serveSide: Side; pointMsg: string;
+  target: number; humanSide: Side; reported: boolean;
+}
+interface Input { left: boolean; right: boolean; jumpBuf: number; hitBuf: number; setHeld: boolean }
+
+const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
+const dirOf = (s: Side) => (s === 'L' ? 1 : -1);
+
+function homeX(side: Side, slot: number) {
+  const l = slot === 0 ? 560 : 260;
+  return side === 'L' ? l : W - l;
+}
+function bounds(side: Side) {
+  const margin = 60, gap = NET_HALF + 50;
+  return side === 'L' ? [margin, NET_X - gap] : [NET_X + gap, W - margin];
+}
+
+function makePlayer(id: number, side: Side, slot: number, isHuman: boolean, name: string): VPlayer {
+  return {
+    id, side, isHuman, name, x: homeX(side, slot), y: STAND_Y, vx: 0, vy: 0, onGround: true,
+    facing: dirOf(side), willMiss: false, react: 0, wasInReach: false,
+  };
+}
+
+function createVolleyball(target: number, playerName: string): VState {
+  const humanSide: Side = Math.random() < 0.5 ? 'L' : 'R';
+  const other: Side = humanSide === 'L' ? 'R' : 'L';
+  const players = [
+    makePlayer(0, humanSide, 0, true, playerName || 'You'),
+    makePlayer(1, humanSide, 1, false, 'Mate'),
+    makePlayer(2, other, 0, false, 'Bot'),
+    makePlayer(3, other, 1, false, 'Bot'),
+  ];
+  const s: VState = {
+    players, ball: { x: 0, y: 0, vx: 0, vy: 0, rot: 0, side: 'L', touches: 0, lastHitter: -1 },
+    score: { L: 0, R: 0 }, phase: 'serve', t: 0, until: 0, serveSide: Math.random() < 0.5 ? 'L' : 'R',
+    pointMsg: '', target, humanSide, reported: false,
+  };
+  startServe(s);
+  return s;
+}
+
+function startServe(s: VState) {
+  s.players.forEach(p => {
+    const slot = p.id === 0 || p.id === 2 ? 0 : 1;
+    p.x = homeX(p.side, slot); p.y = STAND_Y; p.vx = 0; p.vy = 0; p.onGround = true;
+    p.willMiss = false; p.react = 0; p.wasInReach = false;
+  });
+  const x = s.serveSide === 'L' ? NET_X - 380 : NET_X + 380;
+  s.ball = { x, y: 300, vx: 0, vy: 0, rot: 0, side: s.serveSide, touches: 0, lastHitter: -1 };
+  s.phase = 'serve';
+  s.until = s.t + 1400;
+}
+
+/* ===================== PHYSICS / RULES ===================== */
+function predictLanding(b: VBall): number {
+  let x = b.x, y = b.y, vx = b.vx, vy = b.vy;
+  for (let i = 0; i < 300; i++) {
+    vy += G_B; x += vx; y += vy;
+    if (x < BALL_R) { x = BALL_R; vx = Math.abs(vx) * 0.8; }
+    if (x > W - BALL_R) { x = W - BALL_R; vx = -Math.abs(vx) * 0.8; }
+    if (vy > 0 && y >= STAND_Y - 30) return x;
+  }
+  return x;
+}
+
+function inReach(p: VPlayer, b: VBall) {
+  return Math.hypot(b.x - p.x, b.y - p.y) < REACH;
+}
+
+function canHit(s: VState, p: VPlayer) {
+  const b = s.ball;
+  return s.phase === 'play' && b.side === p.side && b.touches < 3 && b.lastHitter !== p.id && inReach(p, b);
+}
+
+/** A spike only works if the ball is high enough to angle down over the net; otherwise it becomes a high bump. */
+function spikeFits(b: VBall, p: VPlayer) {
+  const hf = clamp((STAND_Y - p.y) / 180, 0.25, 1);
+  const vx = 9 + 7 * hf;
+  const tNet = Math.max(1, Math.abs(NET_X - b.x) / vx);
+  const maxVy = (NET_TOP - BALL_R - 8 - b.y) / tNet;
+  return maxVy > -1;
+}
+
+function doHit(s: VState, p: VPlayer, intent: Intent, power = 1) {
+  const b = s.ball;
+  const dir = dirOf(p.side);
+  const airborne = p.y < STAND_Y - 30;
+  let vx: number, vy: number;
+  if (intent === 'set') {
+    // soft lob toward the net-side spot where the teammate can spike it
+    const tx = NET_X - dir * 170;
+    vy = -13.5;
+    vx = clamp((tx - b.x) / 78, -9, 9);
+  } else if (airborne && spikeFits(b, p)) {
+    // SPIKE: jumping adds speed; higher jump = harder hit
+    const hf = clamp((STAND_Y - p.y) / 180, 0.25, 1);
+    vx = dir * (9 + 7 * hf) * power;
+    vy = (-3 + 11 * hf) * power;
+    const tNet = Math.max(1, Math.abs(NET_X - b.x) / Math.abs(vx));
+    const maxVy = (NET_TOP - BALL_R - 8 - b.y) / tNet;   // must still clear the net
+    vy = Math.min(vy, maxVy);
+  } else {
+    // ground bump: high arc over the net
+    const tx = NET_X + dir * (220 + Math.random() * 240);
+    vy = -14.5;
+    vx = clamp((tx - b.x) / 92, -12, 12);
+  }
+  const sp = Math.hypot(vx, vy);
+  if (sp > MAX_BALL_V) { vx *= MAX_BALL_V / sp; vy *= MAX_BALL_V / sp; }
+  b.vx = vx; b.vy = vy; b.touches++; b.lastHitter = p.id;
+  p.facing = dir;
+}
+
+function scorePoint(s: VState, winner: Side) {
+  s.score[winner]++;
+  s.serveSide = winner;
+  s.pointMsg = `POINT ${NAMES[winner]}!`;
+  if (s.score[winner] >= s.target) s.phase = 'over';
+  else { s.phase = 'point'; s.until = s.t + 1500; }
+}
+
+function botAI(s: VState, p: VPlayer) {
+  const b = s.ball;
+  const dir = dirOf(p.side);
+  const mates = s.players.filter(q => q.side === p.side);
+  const mate = mates.find(q => q.id !== p.id);
+  const [minX, maxX] = bounds(p.side);
+  const supportX = p.side === 'L' ? NET_X - 250 : NET_X + 250;
+  let targetX = homeX(p.side, p.id === 1 || p.id === 3 ? 1 : 0);
+
+  if (s.phase === 'play') {
+    const landX = predictLanding(b);
+    const mine = p.side === 'L' ? landX < NET_X : landX > NET_X;
+    if (mine) {
+      const myD = Math.abs(p.x - landX);
+      const mateD = mate ? Math.abs(mate.x - landX) : Infinity;
+      const chaser = myD <= mateD;
+      targetX = chaser ? landX - dir * 22 : supportX;
+    } else {
+      targetX = supportX;
+    }
+    if (b.side === p.side && b.lastHitter !== p.id && b.touches < 3) {
+      const reach = inReach(p, b);
+      if (reach && !p.wasInReach) { p.willMiss = Math.random() < 0.08; p.react = 1 + Math.floor(Math.random() * 3); }
+      p.wasInReach = reach;
+      const intent: Intent = mate && b.touches === 0 && Math.random() < 0.9 ? 'set'
+        : (mate && b.touches === 1 ? 'attack' : 'over');
+      // jump to meet high balls
+      const dx = Math.abs(b.x - p.x);
+      const nearNet = Math.abs(NET_X - p.x) < 430;
+      if (p.onGround && dx < 80 && b.vy > -2 && b.y < p.y - 110 && b.y > p.y - 300 && (intent !== 'set') && nearNet) {
+        p.vy = JUMP_V; p.onGround = false;
+      }
+      if (reach && !p.willMiss) {
+        p.react -= 1;
+        if (p.react <= 0) { doHit(s, p, intent, 0.7); p.wasInReach = false; } // bots spike a bit softer
+      }
+    } else {
+      p.wasInReach = false;
+    }
+  }
+
+  const dx = targetX - p.x;
+  p.vx = Math.abs(dx) < 8 ? 0 : Math.sign(dx) * BOT_MOVE;
+  p.x = clamp(p.x + p.vx, minX, maxX);
+  if (Math.abs(p.vx) > 0.1) p.facing = Math.sign(p.vx);
+}
+
+function humanControl(s: VState, p: VPlayer, inp: Input) {
+  const [minX, maxX] = bounds(p.side);
+  const dx = (inp.right ? 1 : 0) - (inp.left ? 1 : 0);
+  p.vx = dx * MOVE;
+  p.x = clamp(p.x + p.vx, minX, maxX);
+  if (dx !== 0) p.facing = dx;
+  if (inp.jumpBuf > 0 && p.onGround) { p.vy = JUMP_V; p.onGround = false; inp.jumpBuf = 0; }
+  if (inp.hitBuf > 0 && canHit(s, p)) {
+    const b = s.ball;
+    const mate = s.players.find(q => q.side === p.side && q.id !== p.id);
+    // SET (hold down / SET button) lobs to the teammate; otherwise bump/spike over the net
+    const intent: Intent = inp.setHeld && mate && b.touches < 2 ? 'set' : 'over';
+    doHit(s, p, intent);
+    inp.hitBuf = 0;
+  }
+}
+
+function step(s: VState, inp: Input) {
+  s.t += DT;
+  if (inp.jumpBuf > 0) inp.jumpBuf--;
+  if (inp.hitBuf > 0) inp.hitBuf--;
+  if (s.phase === 'over') return;
+
+  if (s.phase === 'point') {
+    if (s.t >= s.until) startServe(s);
+    return;
+  }
+  if (s.phase === 'serve' && s.t >= s.until) s.phase = 'play';
+
+  for (const p of s.players) {
+    if (p.isHuman) humanControl(s, p, inp); else botAI(s, p);
+    p.vy += G_P; p.y += p.vy;
+    if (p.y >= STAND_Y) { p.y = STAND_Y; p.vy = 0; p.onGround = true; }
+  }
+
+  if (s.phase !== 'play') return;
+  const b = s.ball;
+  b.vy += G_B; b.x += b.vx; b.y += b.vy;
+  b.rot += b.vx * 0.04;
+  if (b.x < BALL_R) { b.x = BALL_R; b.vx = Math.abs(b.vx) * 0.8; }
+  if (b.x > W - BALL_R) { b.x = W - BALL_R; b.vx = -Math.abs(b.vx) * 0.8; }
+
+  // net
+  const cx = clamp(b.x, NET_X - NET_HALF, NET_X + NET_HALF);
+  const cy = clamp(b.y, NET_TOP, GROUND);
+  let ndx = b.x - cx, ndy = b.y - cy;
+  const nd = Math.hypot(ndx, ndy);
+  if (nd < BALL_R) {
+    if (nd === 0) { ndx = 0; ndy = -1; } else { ndx /= nd; ndy /= nd; }
+    b.x = cx + ndx * BALL_R; b.y = cy + ndy * BALL_R;
+    const vn = b.vx * ndx + b.vy * ndy;
+    if (vn < 0) { b.vx -= 1.6 * vn * ndx; b.vy -= 1.6 * vn * ndy; }
+  }
+
+  // crossing the net resets the touch count for the receiving team
+  const side: Side = b.x < NET_X ? 'L' : 'R';
+  if (side !== b.side) { b.side = side; b.touches = 0; b.lastHitter = -1; }
+
+  // ball on the ground of a team => other team scores
+  if (b.y + BALL_R >= GROUND) {
+    b.y = GROUND - BALL_R;
+    scorePoint(s, b.x < NET_X ? 'R' : 'L');
+  }
+}
+
+/* ===================== RENDERING ===================== */
+function drawBackground(ctx: CanvasRenderingContext2D) {
+  const sky = ctx.createLinearGradient(0, 0, 0, GROUND);
+  sky.addColorStop(0, '#2e7bea'); sky.addColorStop(1, '#8fd0ff');
+  ctx.fillStyle = sky; ctx.fillRect(0, 0, W, GROUND);
+  // crowd
+  for (let row = 0; row < 5; row++) {
+    for (let i = 0; i < 80; i++) {
+      const hue = (i * 37 + row * 59) % 3;
+      ctx.fillStyle = ['#2a4fa3', '#3a63c4', '#22408a'][hue];
+      ctx.beginPath();
+      ctx.arc(10 + i * 20 + (row % 2) * 10, 420 + row * 22, 9, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+  const floor = ctx.createLinearGradient(0, GROUND, 0, H);
+  floor.addColorStop(0, '#f0c777'); floor.addColorStop(1, '#c99650');
+  ctx.fillStyle = floor; ctx.fillRect(0, GROUND, W, H - GROUND);
+  ctx.fillStyle = '#fff'; ctx.fillRect(0, GROUND, W, 5);
+  ctx.fillRect(NET_X - 3, GROUND, 6, H - GROUND);
+}
+
+function drawNet(ctx: CanvasRenderingContext2D) {
+  ctx.fillStyle = '#3c4050';
+  ctx.fillRect(NET_X - NET_HALF, NET_TOP, NET_HALF * 2, GROUND - NET_TOP);
+  ctx.strokeStyle = 'rgba(255,255,255,0.8)'; ctx.lineWidth = 2;
+  for (let y = NET_TOP + 14; y < NET_TOP + 150; y += 16) {
+    ctx.beginPath(); ctx.moveTo(NET_X - 22, y); ctx.lineTo(NET_X + 22, y); ctx.stroke();
+  }
+  for (let x = NET_X - 22; x <= NET_X + 22; x += 11) {
+    ctx.beginPath(); ctx.moveTo(x, NET_TOP + 6); ctx.lineTo(x, NET_TOP + 150); ctx.stroke();
+  }
+  ctx.fillStyle = '#fff'; ctx.fillRect(NET_X - 24, NET_TOP, 48, 8);
+}
+
+function shadow(ctx: CanvasRenderingContext2D, x: number, height: number, w: number) {
+  const k = clamp(1 - height / 420, 0.3, 1);
+  ctx.fillStyle = `rgba(0,0,0,${0.3 * k})`;
+  ctx.beginPath(); ctx.ellipse(x, GROUND + 14, w * k, 9 * k, 0, 0, Math.PI * 2); ctx.fill();
+}
+
+function drawBall(ctx: CanvasRenderingContext2D, b: VBall) {
+  shadow(ctx, b.x, GROUND - b.y, BALL_R);
+  ctx.save();
+  ctx.translate(b.x, b.y); ctx.rotate(b.rot);
+  ctx.beginPath(); ctx.arc(0, 0, BALL_R, 0, Math.PI * 2);
+  ctx.fillStyle = '#fff'; ctx.fill();
+  ctx.save(); ctx.clip();
+  ctx.lineWidth = 4;
+  ctx.strokeStyle = '#2d6bd8';
+  ctx.beginPath(); ctx.arc(-BALL_R * 1.1, 0, BALL_R * 1.0, -0.9, 0.9); ctx.stroke();
+  ctx.beginPath(); ctx.arc(BALL_R * 1.1, 0, BALL_R * 1.0, Math.PI - 0.9, Math.PI + 0.9); ctx.stroke();
+  ctx.strokeStyle = '#f2c230';
+  ctx.beginPath(); ctx.arc(0, -BALL_R * 1.1, BALL_R, 0.7, Math.PI - 0.7); ctx.stroke();
+  ctx.beginPath(); ctx.arc(0, BALL_R * 1.1, BALL_R, Math.PI + 0.7, -0.7); ctx.stroke();
+  ctx.restore();
+  ctx.lineWidth = 3; ctx.strokeStyle = '#15203c';
+  ctx.beginPath(); ctx.arc(0, 0, BALL_R, 0, Math.PI * 2); ctx.stroke();
+  ctx.restore();
+}
+
+function drawPlayer(ctx: CanvasRenderingContext2D, p: VPlayer, img: HTMLImageElement, t: number) {
+  shadow(ctx, p.x, STAND_Y - p.y, 40);
+  const col = COLORS[p.side];
+  // team-coloured ring at the feet
+  ctx.strokeStyle = col; ctx.lineWidth = 5;
+  ctx.beginPath(); ctx.ellipse(p.x, GROUND + 14, 40, 10, 0, 0, Math.PI * 2); ctx.stroke();
+
+  const size = 118;
+  const squash = p.onGround ? 1 + Math.sin(t * 0.008 + p.id) * 0.015 : 1;
+  ctx.save();
+  ctx.translate(p.x, p.y - 6);
+  ctx.scale(p.facing, squash);
+  if (img.complete && img.naturalWidth > 0) {
+    ctx.drawImage(img, -size / 2, -size / 2, size, size);
+  } else {
+    ctx.fillStyle = col; ctx.beginPath(); ctx.arc(0, 0, 36, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.restore();
+
+  // tag above head
+  const label = p.isHuman ? 'YOU' : p.name.toUpperCase();
+  ctx.font = 'bold 15px monospace'; ctx.textAlign = 'center';
+  const wTag = ctx.measureText(label).width + 16;
+  ctx.fillStyle = col; ctx.fillRect(p.x - wTag / 2, p.y - 98, wTag, 20);
+  ctx.fillStyle = '#fff'; ctx.fillText(label, p.x, p.y - 83);
+  if (p.isHuman) {
+    ctx.fillStyle = '#ffe14a';
+    ctx.beginPath(); ctx.moveTo(p.x - 9, p.y - 118); ctx.lineTo(p.x + 9, p.y - 118); ctx.lineTo(p.x, p.y - 104); ctx.fill();
+  }
+}
+
+function drawHUD(ctx: CanvasRenderingContext2D, s: VState) {
+  ctx.fillStyle = 'rgba(0,0,0,0.65)'; ctx.fillRect(W / 2 - 230, 14, 460, 74);
+  ctx.textAlign = 'center';
+  ctx.font = 'bold 40px monospace';
+  ctx.fillStyle = COLORS.L; ctx.fillText(`BLUE ${s.score.L}`, W / 2 - 110, 58);
+  ctx.fillStyle = '#fff'; ctx.fillText('—', W / 2, 58);
+  ctx.fillStyle = COLORS.R; ctx.fillText(`${s.score.R} RED`, W / 2 + 110, 58);
+  ctx.font = 'bold 15px monospace'; ctx.fillStyle = '#ffe46a';
+  ctx.fillText(`FIRST TO ${s.target}`, W / 2, 80);
+
+  if (s.phase === 'play') {
+    const b = s.ball;
+    ctx.font = 'bold 18px monospace';
+    ctx.fillStyle = COLORS[b.side];
+    ctx.textAlign = b.side === 'L' ? 'left' : 'right';
+    ctx.fillText(`TOUCHES ${b.touches}/3`, b.side === 'L' ? 30 : W - 30, 40);
+  }
+
+  if (s.phase === 'serve') {
+    ctx.font = 'bold 64px monospace'; ctx.textAlign = 'center';
+    ctx.fillStyle = '#fff'; ctx.strokeStyle = '#000'; ctx.lineWidth = 6;
+    ctx.strokeText('GET READY', W / 2, 250); ctx.fillText('GET READY', W / 2, 250);
+  } else if (s.phase === 'point' || s.phase === 'over') {
+    ctx.font = 'bold 72px monospace'; ctx.textAlign = 'center';
+    const side: Side = s.pointMsg.includes('BLUE') ? 'L' : 'R';
+    ctx.fillStyle = COLORS[side]; ctx.strokeStyle = '#000'; ctx.lineWidth = 8;
+    ctx.strokeText(s.pointMsg, W / 2, 250); ctx.fillText(s.pointMsg, W / 2, 250);
+  }
+}
+
+function render(ctx: CanvasRenderingContext2D, s: VState, cw: number, ch: number, dpr: number, img: HTMLImageElement) {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = '#05101f'; ctx.fillRect(0, 0, cw * dpr, ch * dpr);
+  const scale = Math.min(cw / W, ch / H);
+  const ox = (cw - W * scale) / 2, oy = (ch - H * scale) / 2;
+  ctx.setTransform(scale * dpr, 0, 0, scale * dpr, ox * dpr, oy * dpr);
+  ctx.save(); ctx.beginPath(); ctx.rect(0, 0, W, H); ctx.clip();
+  const now = performance.now();
+  drawBackground(ctx);
+  drawNet(ctx);
+  s.players.forEach(p => drawPlayer(ctx, p, img, now));
+  drawBall(ctx, s.ball);
+  drawHUD(ctx, s);
+  ctx.restore();
+}
+
+/* ===================== COMPONENT ===================== */
+interface Props { target: number; playerName: string; onExit: () => void }
+
+export default function VolleyballGame({ target, playerName, onExit }: Props) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const stateRef = useRef<VState>(createVolleyball(target, playerName));
+  const inputRef = useRef<Input>({ left: false, right: false, jumpBuf: 0, hitBuf: 0, setHeld: false });
+  const imgRef = useRef<HTMLImageElement>(new Image());
+  const [banner, setBanner] = useState(true);
+  const [result, setResult] = useState<null | { won: boolean; l: number; r: number }>(null);
+  const isMobile = useIsMobileDevice();
+  const isPortrait = useIsPortrait();
+
+  useEffect(() => { imgRef.current.src = crewImg; }, []);
+  useEffect(() => { const t = setTimeout(() => setBanner(false), 4500); return () => clearTimeout(t); }, []);
+
+  // keyboard (desktop)
+  useEffect(() => {
+    if (isMobile) return;
+    const down = (e: KeyboardEvent) => {
+      const k = e.key.toLowerCase(); const i = inputRef.current;
+      if (k === 'a' || k === 'arrowleft') i.left = true;
+      else if (k === 'd' || k === 'arrowright') i.right = true;
+      else if (k === 's' || k === 'arrowdown') i.setHeld = true;
+      else if ((k === 'w' || k === 'arrowup') && !e.repeat) { i.jumpBuf = 8; e.preventDefault(); }
+      else if ((k === ' ' || k === 'k' || k === 'enter') && !e.repeat) { i.hitBuf = 10; e.preventDefault(); }
+    };
+    const up = (e: KeyboardEvent) => {
+      const k = e.key.toLowerCase(); const i = inputRef.current;
+      if (k === 'a' || k === 'arrowleft') i.left = false;
+      else if (k === 'd' || k === 'arrowright') i.right = false;
+      else if (k === 's' || k === 'arrowdown') i.setHeld = false;
+    };
+    const clear = () => { const i = inputRef.current; i.left = i.right = i.setHeld = false; };
+    window.addEventListener('keydown', down); window.addEventListener('keyup', up);
+    window.addEventListener('blur', clear);
+    return () => {
+      window.removeEventListener('keydown', down); window.removeEventListener('keyup', up);
+      window.removeEventListener('blur', clear);
+    };
+  }, [isMobile]);
+
+  // fullscreen on first touch (mobile)
+  useEffect(() => {
+    if (!isMobile) return;
+    const go = async () => {
+      try {
+        if (!document.fullscreenElement) await document.documentElement.requestFullscreen?.();
+        (screen as any).orientation?.lock?.('landscape')?.catch?.(() => {});
+      } catch { /* ignore */ }
+    };
+    window.addEventListener('touchstart', go, { once: true });
+    return () => window.removeEventListener('touchstart', go);
+  }, [isMobile]);
+
+  // game loop
+  useEffect(() => {
+    const canvas = canvasRef.current!;
+    const ctx = canvas.getContext('2d')!;
+    let raf = 0, last = performance.now(), acc = 0;
+    let cw = window.innerWidth, ch = window.innerHeight;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const resize = () => {
+      cw = window.innerWidth; ch = window.innerHeight;
+      canvas.width = cw * dpr; canvas.height = ch * dpr;
+      canvas.style.width = `${cw}px`; canvas.style.height = `${ch}px`;
+    };
+    resize();
+    window.addEventListener('resize', resize);
+
+    const loop = (time: number) => {
+      acc = Math.min(acc + (time - last), DT * 5);
+      last = time;
+      const s = stateRef.current;
+      while (acc >= DT) { step(s, inputRef.current); acc -= DT; }
+      if (s.phase === 'over' && !s.reported) {
+        s.reported = true;
+        const winner: Side = s.score.L > s.score.R ? 'L' : 'R';
+        setResult({ won: winner === s.humanSide, l: s.score.L, r: s.score.R });
+      }
+      render(ctx, s, cw, ch, dpr, imgRef.current);
+      raf = requestAnimationFrame(loop);
+    };
+    raf = requestAnimationFrame(loop);
+    return () => { cancelAnimationFrame(raf); window.removeEventListener('resize', resize); };
+  }, []);
+
+  const s = stateRef.current;
+  const mySide = s.humanSide;
+  const enemy = mySide === 'L' ? 'red' : 'blue';
+  const btn = (label: string, style: React.CSSProperties, onDown: () => void, onUp?: () => void) => (
+    <button
+      className="pointer-events-auto absolute rounded-full text-white font-mono font-bold border-[3px] border-white/70 select-none"
+      style={{ width: 76, height: 76, fontSize: 14, touchAction: 'none', ...style }}
+      onPointerDown={(e) => { e.preventDefault(); (e.target as Element).setPointerCapture?.(e.pointerId); onDown(); }}
+      onPointerUp={() => onUp?.()} onPointerCancel={() => onUp?.()}
+    >
+      {label}
+    </button>
+  );
+
+  return (
+    <div className="fixed inset-0 bg-black overflow-hidden" style={{ touchAction: 'none' }}>
+      <canvas ref={canvasRef} className="block" />
+
+      {banner && (
+        <div className="fixed inset-x-0 top-[22%] z-[70] flex justify-center px-4 pointer-events-none select-none">
+          <div
+            className="px-6 py-4 rounded-2xl bg-black/80 border-2 font-mono font-bold text-center text-lg sm:text-3xl text-white"
+            style={{ borderColor: COLORS[mySide], boxShadow: `0 0 30px ${COLORS[mySide]}` }}
+          >
+            You are {NAMES[mySide]} TEAM. Land the ball on the {enemy} side to win.
+            <div className="text-xs sm:text-base font-normal mt-2 opacity-80">
+              {isMobile
+                ? 'JUMP then HIT = hard spike • SET = pass to your mate'
+                : 'A/D move • W jump • SPACE hit (jump first = hard spike) • hold S + SPACE = set for your mate'}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isMobile && !result && (
+        <div className="fixed inset-0 pointer-events-none z-40">
+          {btn('◀', { bottom: 40, left: 24 }, () => { inputRef.current.left = true; }, () => { inputRef.current.left = false; })}
+          {btn('▶', { bottom: 40, left: 116 }, () => { inputRef.current.right = true; }, () => { inputRef.current.right = false; })}
+          {btn('JUMP', { bottom: 40, right: 116, background: 'rgba(74,144,217,0.8)' }, () => { inputRef.current.jumpBuf = 8; })}
+          {btn('HIT', { bottom: 40, right: 24, background: 'rgba(224,48,48,0.85)' }, () => { inputRef.current.hitBuf = 10; })}
+          {btn('SET', { bottom: 130, right: 70, width: 62, height: 62, background: 'rgba(61,186,111,0.85)' },
+            () => { inputRef.current.setHeld = true; inputRef.current.hitBuf = 10; }, () => { inputRef.current.setHeld = false; })}
+        </div>
+      )}
+
+      {isMobile && isPortrait && <RotateDevicePrompt />}
+
+      {result && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/90 backdrop-blur-sm">
+          <div className="text-center space-y-5 p-8 rounded-xl border border-border bg-card shadow-2xl max-w-md">
+            <h1 className="text-4xl font-bold font-mono tracking-wider" style={{ color: result.won ? '#3dba6f' : '#e03030' }}>
+              {result.won ? '🏆 YOU WON!' : 'YOU LOST'}
+            </h1>
+            <p className="text-2xl font-mono font-bold">
+              <span style={{ color: COLORS.L }}>BLUE {result.l}</span>
+              <span className="text-white mx-3">—</span>
+              <span style={{ color: COLORS.R }}>{result.r} RED</span>
+            </p>
+            <button
+              onClick={onExit}
+              className="px-8 py-3 rounded-lg font-mono font-bold text-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity"
+            >
+              PLAY AGAIN
+            </button>
+          </div>
+        </div>
+      )}
+
+      <DraggableExitButton onExit={onExit} />
+    </div>
+  );
+}
