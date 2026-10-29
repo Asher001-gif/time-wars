@@ -1,4 +1,4 @@
-import refereeImg from '@/assets/referee.png';
+import refereeImg from '@/assets/referee.webp';
 
 interface Props {
   message: string;

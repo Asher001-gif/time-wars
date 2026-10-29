@@ -5,6 +5,7 @@ import GameCanvas from '@/components/GameCanvas';
 import LobbyScreen from '@/components/LobbyScreen';
 import GameSelectScreen from '@/components/GameSelectScreen';
 import FootballTimeScreen from '@/components/FootballTimeScreen';
+import { preloadReferee } from '@/game/preload';
 import RoleBanner from '@/components/RoleBanner';
 import GameOverScreen from '@/components/GameOverScreen';
 import LoadingScreen from '@/components/LoadingScreen';
@@ -38,7 +39,8 @@ export default function Index() {
     setTimeout(() => setSaved(false), 1500);
   }, [draftName]);
 
-  const handleStart = useCallback((settings: GameSettings) => {
+  const handleStart = useCallback(async (settings: GameSettings) => {
+    if (settings.mapMode === 'football') await preloadReferee(); // image ready before kickoff
     try {
       const game = settings.mapMode === 'football'
         ? createFootballGame(settings, username)

@@ -1,3 +1,5 @@
+import { useEffect } from 'react';
+import { preloadReferee } from '@/game/preload';
 import { MATCH_MINUTE_OPTIONS, MatchMinutes } from '@/game/types';
 
 interface Props {
@@ -6,6 +8,7 @@ interface Props {
 }
 
 export default function FootballTimeScreen({ onBack, onPick }: Props) {
+  useEffect(() => { preloadReferee(); }, []);
   return (
     <div className="fixed inset-0 z-40 flex flex-col items-center justify-center gap-8 bg-background font-mono p-6">
       <button
