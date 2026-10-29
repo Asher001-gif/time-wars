@@ -34,7 +34,7 @@ interface VPlayer {
   x: number; y: number; vx: number; vy: number; onGround: boolean;
   facing: number; willMiss: boolean; react: number; wasInReach: boolean; meter: number; armed: boolean;
 }
-interface VBall { x: number; y: number; vx: number; vy: number; rot: number; side: Side; touches: number; lastHitter: number; rally: number; fire: boolean; trail: { x: number; y: number }[] }
+interface VBall { x: number; y: number; vx: number; vy: number; rot: number; side: Side; touches: number; lastHitter: number; rally: number; lastHitT: number; fire: boolean; trail: { x: number; y: number }[] }
 interface VState {
   players: VPlayer[]; ball: VBall;
   score: { L: number; R: number };
@@ -73,7 +73,7 @@ function createVolleyball(target: number, playerName: string): VState {
     makePlayer(3, other, 1, false, 'Opponent'),
   ];
   const s: VState = {
-    players, ball: { x: 0, y: 0, vx: 0, vy: 0, rot: 0, side: 'L', touches: 0, lastHitter: -1, rally: 0, fire: false, trail: [] },
+    players, ball: { x: 0, y: 0, vx: 0, vy: 0, rot: 0, side: 'L', touches: 0, lastHitter: -1, rally: 0, lastHitT: -9999, fire: false, trail: [] },
     score: { L: 0, R: 0 }, phase: 'serve', t: 0, until: 0, serveSide: Math.random() < 0.5 ? 'L' : 'R',
     pointMsg: '', target, humanSide, reported: false,
   };
@@ -88,7 +88,7 @@ function startServe(s: VState) {
     p.willMiss = false; p.react = 0; p.wasInReach = false;
   });
   const x = s.serveSide === 'L' ? NET_X - 380 : NET_X + 380;
-  s.ball = { x, y: 300, vx: 0, vy: 0, rot: 0, side: s.serveSide, touches: 0, lastHitter: -1, rally: 0, fire: false, trail: [] };
+  s.ball = { x, y: 300, vx: 0, vy: 0, rot: 0, side: s.serveSide, touches: 0, lastHitter: -1, rally: 0, lastHitT: -9999, fire: false, trail: [] };
   s.phase = 'serve';
   s.until = s.t + 1400;
 }
@@ -144,7 +144,7 @@ function inReach(p: VPlayer, b: VBall) {
 
 function canHit(s: VState, p: VPlayer) {
   const b = s.ball;
-  return s.phase === 'play' && b.side === p.side && b.touches < 3 && b.lastHitter !== p.id && inReach(p, b);
+  return s.phase === 'play' && b.side === p.side && b.touches < 3 && (b.lastHitter !== p.id || s.t - b.lastHitT > 300) && inReach(p, b);
 }
 
 /** A spike only works if the ball is high enough to angle down over the net; otherwise it becomes a high bump. */
@@ -167,7 +167,7 @@ function doHit(s: VState, p: VPlayer, intent: Intent, power = 1) {
       vx = dir * POWER_SPEED * Math.cos(ang); vy = -POWER_SPEED * Math.sin(ang);
       if (clearsNet(b.x, b.y, vx, vy)) break;
     }
-    b.vx = vx; b.vy = vy; b.touches++; b.lastHitter = p.id; b.rally++;
+    b.vx = vx; b.vy = vy; b.touches++; b.lastHitter = p.id; b.lastHitT = s.t; b.rally++;
     b.fire = true; b.trail = []; p.meter = 0; p.armed = false; p.facing = dir;
     return;
   }
@@ -217,7 +217,7 @@ function doHit(s: VState, p: VPlayer, intent: Intent, power = 1) {
   const sp2 = Math.hypot(vx, vy);
   if (sp2 > hard) { vx *= hard / sp2; vy *= hard / sp2; }
   b.rally++;
-  b.vx = vx; b.vy = vy; b.touches++; b.lastHitter = p.id;
+  b.vx = vx; b.vy = vy; b.touches++; b.lastHitter = p.id; b.lastHitT = s.t;
   p.facing = dir;
 }
 
@@ -256,7 +256,7 @@ function botAI(s: VState, p: VPlayer) {
     } else {
       targetX = supportX;
     }
-    if (b.side === p.side && b.lastHitter !== p.id && b.touches < 3) {
+    if (b.side === p.side && b.touches < 3) {
       const intent = botIntent(s, p);
       // jump to meet high balls
       const dx = Math.abs(b.x - p.x);
@@ -336,7 +336,7 @@ function step(s: VState, inp: Input) {
   if (side !== b.side) { b.side = side; b.touches = 0; b.lastHitter = -1; }
 
   // everyone (you, mate, opponents): ball touching ANY part of the body is a hit (aimed + physics).
-  // A player who can't touch it (just hit it / 3 touches used) makes it bounce off them like a solid body.
+  // If the team already used 3 touches (or the ball is still leaving the player's own hit), it bounces off like a solid body.
   for (const p of s.players) {
     if (b.side !== p.side) continue;
     let touched = false;
@@ -345,7 +345,11 @@ function step(s: VState, inp: Input) {
       touched = bodyContactAt(p, px + (b.x - px) * t, py + (b.y - py) * t);
     }
     if (!touched) continue;
-    if (b.touches < 3 && b.lastHitter !== p.id) {
+    const c0 = contact(p, b.x, b.y);
+    const approaching = (b.vx - p.vx) * c0.nx + (b.vy - p.vy) * c0.ny < 0;
+    // the same player may hit again (after a short moment, when the ball comes back into them)
+    const again = b.lastHitter !== p.id || (s.t - b.lastHitT > 300 && approaching);
+    if (b.touches < 3 && again) {
       const mate = s.players.find(q => q.side === p.side && q.id !== p.id);
       const intent: Intent = p.isHuman
         ? (inp.setHeld && mate && b.touches < 2 ? 'set' : 'over')
