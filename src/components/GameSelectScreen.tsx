@@ -26,7 +26,7 @@ export default function GameSelectScreen({ onBack, onPlay }: Props) {
               key={g.id}
               onClick={() => onPlay(g.id)}
               aria-label={`Play ${g.name}`}
-              className="flex flex-col rounded-md overflow-hidden bg-[#2b2e38] hover:bg-[#363a47] hover:scale-[1.03] active:scale-95 transition text-left"
+              className="flex flex-col gap-1.5 p-1.5 sm:p-2 rounded-2xl bg-[#2b2e38] hover:bg-[#363a47] shadow-lg shadow-black/30 hover:scale-[1.03] active:scale-95 transition text-left"
             >
               <img
                 src={g.icon}
@@ -36,9 +36,9 @@ export default function GameSelectScreen({ onBack, onPlay }: Props) {
                 loading="eager"
                 decoding="async"
                 draggable={false}
-                className="w-full aspect-square object-cover select-none"
+                className="w-full aspect-square object-cover rounded-xl select-none"
               />
-              <span className="px-2 py-1.5 text-white text-[11px] sm:text-sm font-semibold truncate">
+              <span className="px-1.5 pb-1 text-white text-[11px] sm:text-sm font-semibold truncate">
                 {g.name}
               </span>
             </button>
