@@ -297,7 +297,7 @@ function drawFootballPlayer(ctx: CanvasRenderingContext2D, p: Player) {
   ctx.lineWidth = 2;
   ctx.stroke();
 
-  // Reuse the existing ASTERON Mars robot sprite
+  // Reuse the existing Time Wars Mars robot sprite
   const img = SPRITES['crew_a'];
   const size = 52 * s;
   ctx.save();
@@ -363,8 +363,6 @@ function drawFootballHUD(ctx: CanvasRenderingContext2D, state: GameState, w: num
   ctx.fillRect(0, 0, w, 60);
 
   const score = state.score || { red: 0, blue: 0 };
-  const round = (state.totalRounds ?? 5) - (state.roundsRemaining ?? 0) + 1;
-  const total = state.totalRounds ?? 5;
 
   ctx.textAlign = 'center';
   ctx.font = 'bold 26px monospace';
@@ -377,11 +375,11 @@ function drawFootballHUD(ctx: CanvasRenderingContext2D, state: GameState, w: num
 
   ctx.fillStyle = '#ffe46a';
   ctx.font = 'bold 12px monospace';
-  ctx.fillText(`Round ${Math.min(round, total)} / ${total}`, w / 2, 54);
+  ctx.fillText(`${state.settings?.matchMinutes ?? 5} MIN MATCH`, w / 2, 54);
 
   // Round timer
-  const roundTimeMs = ((state.settings?.roundTime ?? 120) * 1000);
-  const elapsed = performance.now() - (state.roundStartedAt ?? performance.now());
+  const roundTimeMs = ((state.settings?.matchMinutes ?? 5) * 60000);
+  const elapsed = performance.now() - (state.matchStartedAt ?? performance.now());
   const remainMs = Math.max(0, roundTimeMs - elapsed);
   const mm = Math.floor(remainMs / 60000);
   const ss = Math.floor((remainMs % 60000) / 1000);
@@ -830,7 +828,7 @@ function drawMarsSurface(ctx: CanvasRenderingContext2D, w: number, h: number) {
   ctx.strokeRect(0, 0, w, h);
 }
 
-/* ==================== EAST EXPANSION (Asteron v4.0) ==================== */
+/* ==================== EAST EXPANSION (Time Wars v4.0) ==================== */
 
 // Per-billboard image cache. Replace BILLBOARDS[i].imageSrc to swap ads;
 // the renderer lazily loads each URL exactly once.
@@ -951,7 +949,7 @@ function drawBillboards(ctx: CanvasRenderingContext2D) {
       ctx.fillText('YOUR AD HERE!', bb.cx, bb.cy + 4);
       ctx.fillStyle = 'rgba(255,255,255,0.4)';
       ctx.font = '7px monospace';
-      ctx.fillText('ASTERON · v4.0', bb.cx, bb.cy + 16);
+      ctx.fillText('TIME WARS · v4.0', bb.cx, bb.cy + 16);
     }
 
     // Glass glare overlay

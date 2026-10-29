@@ -16,11 +16,12 @@ export const TEAM_NAMES: Record<TeamIndex, string> = {
   2: 'GREEN',
 };
 
-export type JailTimerOption = 'off' | 10 | 20 | 'infinity';
+export type JailTimerOption = 'off' | 10 | 20 | 30 | 'infinity';
 export type SpeedOption = 'slow' | 'medium' | 'fast';
 export type FootballSpeedOption = 'slow' | 'medium-slow' | 'medium' | 'high' | 'extreme';
 export type MapMode = 'mars' | 'football';
 export type MatchRounds = 3 | 5 | 10;
+export type MatchMinutes = 5 | 10 | 20;
 export type RoundTime = 60 | 120 | 300; // seconds per football round
 
 export const ROUND_TIME_OPTIONS: RoundTime[] = [60, 120, 300];
@@ -63,6 +64,7 @@ export interface GameSettings {
   matchRounds?: MatchRounds; // football only
   footballSpeed?: FootballSpeedOption; // football only; defaults to 'medium'
   roundTime?: RoundTime; // football only; seconds per round (default 120)
+  matchMinutes?: MatchMinutes; // football only; total match length
 
 }
 
@@ -79,6 +81,31 @@ export const DEFAULT_SETTINGS: GameSettings = {
   roundTime: 120,
 
 };
+
+// Fixed Mars Mission rules (no settings screen): 12 players, 2 traitors
+// (10s cooldown), 2 protectors (30s jail), 15 tasks, medium speed.
+// roleCounts = [crew, traitors, protectors]; crew absorbs the remaining slots.
+export const MARS_SETTINGS: GameSettings = {
+  tasks: 15,
+  jailTimer: 30,
+  playerCount: 12,
+  speed: 'medium',
+  roleAbilities: ['crew', 'kill', 'jail'],
+  roleCounts: [8, 2, 2],
+  mapMode: 'mars',
+};
+
+export const MATCH_MINUTE_OPTIONS: MatchMinutes[] = [5, 10, 20];
+
+export function footballSettings(minutes: MatchMinutes): GameSettings {
+  return {
+    ...DEFAULT_SETTINGS,
+    mapMode: 'football',
+    matchMinutes: minutes,
+    footballSpeed: 'medium',
+    roundTime: (minutes * 60) as any,
+  };
+}
 
 export type TaskType =
   | 'frequency'
@@ -284,6 +311,10 @@ export interface GameState {
   lastGoalAt?: number; // freeze movement briefly after a goal
   goalFlash?: { team: 'red' | 'blue' | 'tie'; time: number } | null;
   roundStartedAt?: number; // performance.now() when current football round began
+  matchStartedAt?: number; // performance.now() when the football match began
+  ballIdleX?: number;      // ball anchor for the 7s "same position" rule
+  ballIdleY?: number;
+  ballIdleSince?: number;
   // Referee intervention (football)
   ballCornerSince?: number;      // ms timestamp when ball first entered a corner
   refereeActive?: boolean;
@@ -325,7 +356,7 @@ export const BULLET_SPEED = 0.95;
 export const BULLET_HIT_RADIUS = 16;
 export const FREEZE_RANGE = 120;
 export const FREEZE_DURATION = 5000;
-export const KILL_COOLDOWN = 5000;
+export const KILL_COOLDOWN = 10000; // traitor cooldown: 10s
 export const FREEZE_COOLDOWN = 10000;
 export const MAP_WIDTH = 2000;
 export const MAP_HEIGHT = 1200;

@@ -301,7 +301,7 @@ const ROOM_CENTERS = [
 ];
 
 // All 5 search waypoints used when a hunter can't find any enemy:
-// 3 main rooms + 2 east-side shelters from the ASTERON expansion.
+// 3 main rooms + 2 east-side shelters from the Time Wars expansion.
 const SEARCH_ROUTE = [
   { x: 800,  y: 190 },  // RESEARCH
   { x: 215,  y: 625 },  // ECOSYSTEM

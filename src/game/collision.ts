@@ -60,7 +60,7 @@ export const ROOM_WALLS: Wall[] = [
   { x1: JAIL_RECT.x, y1: JAIL_RECT.y, x2: JAIL_RECT.x, y2: JAIL_RECT.y + JAIL_RECT.h },
   { x1: JAIL_RECT.x + JAIL_RECT.w, y1: JAIL_RECT.y, x2: JAIL_RECT.x + JAIL_RECT.w, y2: JAIL_RECT.y + JAIL_RECT.h },
   // ============================================================
-  // === EAST EXPANSION (Asteron v4.0) ===
+  // === EAST EXPANSION (Time Wars v4.0) ===
   // Map widened from 1600 → 2000. New strip occupies x≈1620..1990.
   // Contains 3 billboards (top) + 2 mini shelters (mid / lower).
   // ============================================================

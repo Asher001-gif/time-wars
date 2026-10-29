@@ -15,7 +15,8 @@ import {
 import { pickRefereeMessage } from './refereeMessages';
 
 // ============ REFEREE INTERVENTION ============
-const REF_CORNER_TRIGGER_MS = 6000;
+const REF_IDLE_TRIGGER_MS = 7000;   // ball in same spot this long => yellow card + centre restart
+const REF_IDLE_RADIUS = 8;          // px the ball may drift and still count as 'same position'
 const REF_CUTSCENE_MS = 2000;
 const REF_FREEZE_MS = 1000;
 const REF_COOLDOWN_MS = 10000;
@@ -154,6 +155,20 @@ export function createFootballGame(settings: GameSettings, playerName?: string):
   }
 
 
+  // Randomly put the human on Blue or Red by swapping places with a bot on the other team.
+  if (Math.random() < 0.5) {
+    const hu = players[0];
+    const others = players.filter(p => !p.isHuman && p.footballTeam !== hu.footballTeam);
+    const swap = others[Math.floor(Math.random() * others.length)];
+    if (swap) {
+      const keys = ['x', 'y', 'team', 'footballTeam', 'aiTargetX', 'aiTargetY', 'enhanced'] as const;
+      for (const k of keys) {
+        const t = (hu as any)[k]; (hu as any)[k] = (swap as any)[k]; (swap as any)[k] = t;
+      }
+      hu.enhanced = false;
+    }
+  }
+
   return {
     players,
     phase: 'playing',
@@ -186,6 +201,7 @@ export function createFootballGame(settings: GameSettings, playerName?: string):
     lastGoalAt: 0,
     goalFlash: null,
     roundStartedAt: performance.now(),
+    matchStartedAt: performance.now(),
   };
 }
 
@@ -203,6 +219,7 @@ export function resetForKickoff(state: GameState) {
   state.platforms = [];
   state.lastGoalAt = performance.now();
   state.roundStartedAt = performance.now();
+  state.ballIdleSince = performance.now(); state.ballIdleX = MAP_WIDTH / 2; state.ballIdleY = MAP_HEIGHT / 2;
 }
 
 
@@ -561,6 +578,7 @@ export function updateFootball(state: GameState, dt: number, keys: Set<string>, 
       state.refereeMessage = null;
       state.refereeStartedAt = 0;
       state.ballCornerSince = 0;
+      state.ballIdleSince = now; state.ballIdleX = MAP_WIDTH / 2; state.ballIdleY = MAP_HEIGHT / 2;
       state.refereeCooldownUntil = now + REF_COOLDOWN_MS;
     } else if (elapsed < REF_FREEZE_MS) {
       // Hard-freeze physics for the first second — no AI, no movement.
@@ -569,23 +587,25 @@ export function updateFootball(state: GameState, dt: number, keys: Set<string>, 
     // else: 1s ≤ elapsed < 2s → overlay still shown but game may tick normally.
   }
 
-  // Trigger check: ball parked in a corner for 6s+ (and off cooldown).
+  // Yellow-card rule: ball stays in the same position for 7s => referee, restart from centre.
   {
     const b = state.ball;
-    const inCorner = isInCorner(b.x, b.y);
-    if (inCorner) {
-      if (!state.ballCornerSince) state.ballCornerSince = now;
-      const cornerDur = now - state.ballCornerSince;
+    const atCentre = Math.hypot(b.x - MAP_WIDTH / 2, b.y - MAP_HEIGHT / 2) < 30;
+    const moved = state.ballIdleSince === undefined ||
+      Math.hypot(b.x - (state.ballIdleX ?? b.x), b.y - (state.ballIdleY ?? b.y)) > REF_IDLE_RADIUS;
+    if (moved || atCentre) {
+      state.ballIdleX = b.x; state.ballIdleY = b.y; state.ballIdleSince = now;
+    } else if (!state.refereeActive) {
+      const idleFor = now - (state.ballIdleSince ?? now);
       const cdOk = (state.refereeCooldownUntil ?? 0) <= now;
-      if (cornerDur >= REF_CORNER_TRIGGER_MS && cdOk && !state.refereeActive) {
+      if (idleFor >= REF_IDLE_TRIGGER_MS && cdOk) {
         state.refereeActive = true;
         state.refereeStartedAt = now;
         state.refereeMessage = pickRefereeMessage();
+        state.ballIdleSince = now;
         playRefereeWhistle();
         return { ...state, timeElapsed: state.timeElapsed + dt };
       }
-    } else {
-      state.ballCornerSince = 0;
     }
   }
 
@@ -651,30 +671,21 @@ export function updateFootball(state: GameState, dt: number, keys: Set<string>, 
   }
   reflectBallOnWalls(b);
 
-  // Round-timer expiry — if no goal in time, count as a tie for the round.
-  const roundTimeMs = (state.settings?.roundTime ?? 120) * 1000;
-  const roundElapsed = now - (state.roundStartedAt ?? now);
-  if (roundElapsed >= roundTimeMs) {
-    state.roundsRemaining = (state.roundsRemaining ?? 1) - 1;
-    state.goalFlash = { team: 'tie', time: now };
-    if ((state.roundsRemaining ?? 0) <= 0) {
-      const winColor = state.score.red > state.score.blue ? 1 : state.score.red < state.score.blue ? 0 : null;
-      return { ...state, phase: 'gameover', winner: winColor as any, timeElapsed: state.timeElapsed + dt };
-    }
-    resetForKickoff(state);
-  }
+  // Match timer: the match lasts matchMinutes; goals just restart from centre.
+  const matchMs = (state.settings?.matchMinutes ?? 5) * 60000;
+  const matchElapsed = now - (state.matchStartedAt ?? now);
+  const finish = () => {
+    const winColor = state.score!.red > state.score!.blue ? 1 : state.score!.red < state.score!.blue ? 0 : null;
+    return { ...state, phase: 'gameover' as const, winner: winColor as any, timeElapsed: state.timeElapsed + dt };
+  };
+  if (matchElapsed >= matchMs) return finish();
 
   // Goal check
   const scored = checkGoal(state);
   if (scored) {
     state.score[scored]++;
-    state.roundsRemaining = (state.roundsRemaining ?? 1) - 1;
     state.goalFlash = { team: scored, time: now };
     playGoalSound();
-    if ((state.roundsRemaining ?? 0) <= 0) {
-      const winColor = state.score.red > state.score.blue ? 1 : state.score.red < state.score.blue ? 0 : null;
-      return { ...state, phase: 'gameover', winner: winColor as any, timeElapsed: state.timeElapsed + dt };
-    }
     resetForKickoff(state);
   }
 

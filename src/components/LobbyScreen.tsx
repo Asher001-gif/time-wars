@@ -38,10 +38,10 @@ export default function LobbyScreen({ onEnter, onTutorial }: Props) {
       {/* Title */}
       <div className="relative text-center px-4">
         <h1
-          className="text-6xl md:text-8xl font-bold font-mono tracking-widest text-orange-500"
+          className="text-5xl md:text-8xl font-bold font-mono tracking-widest text-orange-500"
           style={{ textShadow: '0 0 24px rgba(249,115,22,0.7), 0 0 48px rgba(249,115,22,0.4)' }}
         >
-          ASTERON
+          TIME WARS
         </h1>
       </div>
 

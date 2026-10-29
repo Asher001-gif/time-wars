@@ -100,7 +100,7 @@ export default function GameCanvas({ gameState, setGameState, onExit }: Props) {
           }
         }
       }
-      if (key === 'e') {
+      if (key === 'e' || key === '5') {
         e.preventDefault();
         const s = stateRef.current;
         // Door takes priority

@@ -1,9 +1,11 @@
-import { useState, useCallback, useEffect, useMemo } from 'react';
-import { GameSettings, GameState, DEFAULT_SETTINGS } from '@/game/types';
+import { useState, useCallback, useEffect } from 'react';
+import { GameSettings, GameState, MARS_SETTINGS, footballSettings, MatchMinutes } from '@/game/types';
 import { createGame, createFootballGame } from '@/game/engine';
 import GameCanvas from '@/components/GameCanvas';
 import LobbyScreen from '@/components/LobbyScreen';
-import SettingsScreen from '@/components/SettingsScreen';
+import GameSelectScreen from '@/components/GameSelectScreen';
+import FootballTimeScreen from '@/components/FootballTimeScreen';
+import RoleBanner from '@/components/RoleBanner';
 import GameOverScreen from '@/components/GameOverScreen';
 import LoadingScreen from '@/components/LoadingScreen';
 import TutorialScreen from '@/components/TutorialScreen';
@@ -11,23 +13,12 @@ import TutorialScreen from '@/components/TutorialScreen';
 export default function Index() {
   const [gameState, setGameState] = useState<GameState | null>(null);
   const [loading, setLoading] = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
+  const [screen, setScreen] = useState<'lobby' | 'games' | 'footballTime'>('lobby');
   const [showTutorial, setShowTutorial] = useState(false);
   const [username, setUsername] = useState<string>('Astro');
   const [draftName, setDraftName] = useState<string>('');
   const [saved, setSaved] = useState(false);
   const [editing, setEditing] = useState(false);
-
-  const savedSettings = useMemo<GameSettings>(() => {
-    try {
-      const raw = localStorage.getItem('asteron_settings');
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        return { ...DEFAULT_SETTINGS, ...parsed };
-      }
-    } catch {}
-    return DEFAULT_SETTINGS;
-  }, []);
 
   useEffect(() => {
     let stored: string | null = null;
@@ -48,7 +39,6 @@ export default function Index() {
   }, [draftName]);
 
   const handleStart = useCallback((settings: GameSettings) => {
-    setShowSettings(false);
     try {
       const game = settings.mapMode === 'football'
         ? createFootballGame(settings, username)
@@ -61,16 +51,23 @@ export default function Index() {
 
   const handleRestart = useCallback(() => {
     setGameState(null);
-    setShowSettings(false);
+    setScreen('games');
   }, []);
 
   if (loading) return <LoadingScreen />;
-  if (showSettings && !gameState) {
+  if (!gameState && screen === 'games') {
     return (
-      <SettingsScreen
-        initial={savedSettings}
-        onBack={() => setShowSettings(false)}
-        onStart={handleStart}
+      <GameSelectScreen
+        onBack={() => setScreen('lobby')}
+        onPlay={(g) => (g === 'mars' ? handleStart(MARS_SETTINGS) : setScreen('footballTime'))}
+      />
+    );
+  }
+  if (!gameState && screen === 'footballTime') {
+    return (
+      <FootballTimeScreen
+        onBack={() => setScreen('games')}
+        onPick={(m: MatchMinutes) => handleStart(footballSettings(m))}
       />
     );
   }
@@ -114,7 +111,7 @@ export default function Index() {
           )}
         </div>
         <LobbyScreen
-          onEnter={() => setShowSettings(true)}
+          onEnter={() => setScreen('games')}
           onTutorial={() => setShowTutorial(true)}
         />
       </>
@@ -123,6 +120,7 @@ export default function Index() {
 
   return (
     <div className="fixed inset-0 bg-background overflow-hidden">
+      <RoleBanner state={gameState} />
       <GameCanvas gameState={gameState} setGameState={setGameState} onExit={handleRestart} />
       {gameState.phase === 'gameover' && (
         <GameOverScreen state={gameState} onRestart={handleRestart} />

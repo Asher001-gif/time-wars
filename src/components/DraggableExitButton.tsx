@@ -5,7 +5,7 @@ interface Props {
 }
 
 const DRAG_THRESHOLD = 6; // px before a press becomes a drag
-const STORAGE_KEY = 'asteron.exitBtnPos';
+const STORAGE_KEY = 'timewars.exitBtnPos';
 
 export default function DraggableExitButton({ onExit }: Props) {
   const btnRef = useRef<HTMLButtonElement>(null);
