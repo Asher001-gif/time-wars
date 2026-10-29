@@ -16,7 +16,7 @@ const JUMP_V = -17.5;
 const MOVE = 6.2;               // human speed (medium)
 const BOT_MOVE = 5.8;
 const BODY_HW = 48, BODY_TOP = 60, BODY_BOT = 48; // body box around player centre (head to feet)
-const METER_GAIN = 25;          // % of the power meter each hit fills (4 hits = full)
+const METER_GAIN = 10;          // % of the power meter each hit fills (10 hits = full)
 const POWER_SPEED = 27;         // speed of a full-meter lightning shot
 const REACH = 105;              // how far a player can hit the ball
 const MAX_BALL_V = 17;
@@ -512,7 +512,8 @@ function drawPlayer(ctx: CanvasRenderingContext2D, p: VPlayer, img: HTMLImageEle
   const wTag = ctx.measureText(label).width + 16;
   ctx.fillStyle = col; ctx.fillRect(p.x - wTag / 2, p.y - 98, wTag, 20);
   ctx.fillStyle = '#fff'; ctx.fillText(label, p.x, p.y - 83);
-  drawMeter(ctx, p.x - 35, p.y - 114, 70, 8, p.meter, t);
+  // your meter is always shown; a bot's meter only appears once it is full (lightning shot incoming)
+  if (p.isHuman || p.meter >= 100) drawMeter(ctx, p.x - 35, p.y - 114, 70, 8, p.meter, t);
   if (p.isHuman) {
     ctx.fillStyle = '#ffe14a';
     ctx.beginPath(); ctx.moveTo(p.x - 9, p.y - 138); ctx.lineTo(p.x + 9, p.y - 138); ctx.lineTo(p.x, p.y - 124); ctx.fill();
