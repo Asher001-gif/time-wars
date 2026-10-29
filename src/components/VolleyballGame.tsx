@@ -15,6 +15,7 @@ const G_B = 0.34;               // ball gravity
 const JUMP_V = -17.5;
 const MOVE = 6.2;               // human speed (medium)
 const BOT_MOVE = 5.8;
+const BODY_HW = 48, BODY_TOP = 60, BODY_BOT = 48; // body box around player centre (head to feet)
 const REACH = 105;              // how far a player can hit the ball
 const MAX_BALL_V = 17;
 const DT = 1000 / 60;
@@ -66,8 +67,8 @@ function createVolleyball(target: number, playerName: string): VState {
   const players = [
     makePlayer(0, humanSide, 0, true, playerName || 'You'),
     makePlayer(1, humanSide, 1, false, 'Mate'),
-    makePlayer(2, other, 0, false, 'Bot'),
-    makePlayer(3, other, 1, false, 'Bot'),
+    makePlayer(2, other, 0, false, 'Opponent'),
+    makePlayer(3, other, 1, false, 'Opponent'),
   ];
   const s: VState = {
     players, ball: { x: 0, y: 0, vx: 0, vy: 0, rot: 0, side: 'L', touches: 0, lastHitter: -1 },
@@ -102,8 +103,15 @@ function predictLanding(b: VBall): number {
   return x;
 }
 
+/** True if a ball at (x, y) touches ANY part of the player's body (head, torso, legs). */
+function bodyContactAt(p: VPlayer, x: number, y: number) {
+  const cx = clamp(x, p.x - BODY_HW, p.x + BODY_HW);
+  const cy = clamp(y, p.y - BODY_TOP, p.y + BODY_BOT);
+  return Math.hypot(x - cx, y - cy) < BALL_R;
+}
+
 function inReach(p: VPlayer, b: VBall) {
-  return Math.hypot(b.x - p.x, b.y - p.y) < REACH;
+  return Math.hypot(b.x - p.x, b.y - p.y) < REACH || bodyContactAt(p, b.x, b.y);
 }
 
 function canHit(s: VState, p: VPlayer) {
@@ -158,6 +166,13 @@ function scorePoint(s: VState, winner: Side) {
   else { s.phase = 'point'; s.until = s.t + 1500; }
 }
 
+function botIntent(s: VState, p: VPlayer): Intent {
+  const b = s.ball;
+  const mate = s.players.find(q => q.side === p.side && q.id !== p.id);
+  if (mate && b.touches === 0 && Math.random() < 0.9) return 'set';
+  return mate && b.touches === 1 ? 'attack' : 'over';
+}
+
 function botAI(s: VState, p: VPlayer) {
   const b = s.ball;
   const dir = dirOf(p.side);
@@ -179,23 +194,13 @@ function botAI(s: VState, p: VPlayer) {
       targetX = supportX;
     }
     if (b.side === p.side && b.lastHitter !== p.id && b.touches < 3) {
-      const reach = inReach(p, b);
-      if (reach && !p.wasInReach) { p.willMiss = Math.random() < 0.08; p.react = 1 + Math.floor(Math.random() * 3); }
-      p.wasInReach = reach;
-      const intent: Intent = mate && b.touches === 0 && Math.random() < 0.9 ? 'set'
-        : (mate && b.touches === 1 ? 'attack' : 'over');
+      const intent = botIntent(s, p);
       // jump to meet high balls
       const dx = Math.abs(b.x - p.x);
       const nearNet = Math.abs(NET_X - p.x) < 430;
       if (p.onGround && dx < 80 && b.vy > -2 && b.y < p.y - 110 && b.y > p.y - 300 && (intent !== 'set') && nearNet) {
         p.vy = JUMP_V; p.onGround = false;
       }
-      if (reach && !p.willMiss) {
-        p.react -= 1;
-        if (p.react <= 0) { doHit(s, p, intent, 0.7); p.wasInReach = false; } // bots spike a bit softer
-      }
-    } else {
-      p.wasInReach = false;
     }
   }
 
@@ -242,6 +247,7 @@ function step(s: VState, inp: Input) {
 
   if (s.phase !== 'play') return;
   const b = s.ball;
+  const px = b.x, py = b.y;
   b.vy += G_B; b.x += b.vx; b.y += b.vy;
   b.rot += b.vx * 0.04;
   if (b.x < BALL_R) { b.x = BALL_R; b.vx = Math.abs(b.vx) * 0.8; }
@@ -262,6 +268,17 @@ function step(s: VState, inp: Input) {
   // crossing the net resets the touch count for the receiving team
   const side: Side = b.x < NET_X ? 'L' : 'R';
   if (side !== b.side) { b.side = side; b.touches = 0; b.lastHitter = -1; }
+
+  // bots (mates + opponents): ball touching ANY part of the body sends it over / to the mate
+  for (const p of s.players) {
+    if (p.isHuman || b.side !== p.side || b.touches >= 3 || b.lastHitter === p.id) continue;
+    let touched = false;
+    for (let k = 0; k <= 4 && !touched; k++) {
+      const t = k / 4;
+      touched = bodyContactAt(p, px + (b.x - px) * t, py + (b.y - py) * t);
+    }
+    if (touched) { doHit(s, p, botIntent(s, p), 0.7); break; }
+  }
 
   // ball on the ground of a team => other team scores
   if (b.y + BALL_R >= GROUND) {
@@ -450,17 +467,22 @@ export default function VolleyballGame({ target, playerName, onExit }: Props) {
     };
   }, [isMobile]);
 
-  // fullscreen on first touch (mobile)
+  // fullscreen on first interaction (desktop + mobile)
   useEffect(() => {
-    if (!isMobile) return;
     const go = async () => {
       try {
         if (!document.fullscreenElement) await document.documentElement.requestFullscreen?.();
-        (screen as any).orientation?.lock?.('landscape')?.catch?.(() => {});
+        if (isMobile) (screen as any).orientation?.lock?.('landscape')?.catch?.(() => {});
       } catch { /* ignore */ }
     };
-    window.addEventListener('touchstart', go, { once: true });
-    return () => window.removeEventListener('touchstart', go);
+    go(); // works right away when the game was opened by a click/tap
+    window.addEventListener('pointerdown', go, { once: true });
+    window.addEventListener('keydown', go, { once: true });
+    return () => {
+      window.removeEventListener('pointerdown', go);
+      window.removeEventListener('keydown', go);
+      if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
+    };
   }, [isMobile]);
 
   // game loop
