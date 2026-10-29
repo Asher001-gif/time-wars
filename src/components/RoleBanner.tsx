@@ -14,7 +14,7 @@ function describe(state: GameState): { text: string; color: string } {
     return { text: 'You are a TRAITOR. Eliminate every enemy to win.', color: '#e03030' };
   }
   if (me.ability === 'jail') {
-    return { text: 'You are a PROTECTOR. Arrest the traitors to win.', color: '#3dba6f' };
+    return { text: 'You are a PROTECTOR. You cannot tell who is crew or traitor — investigate and arrest the traitors.', color: '#3dba6f' };
   }
   return { text: 'You are a CREW. Complete all tasks to win.', color: '#4a90d9' };
 }

@@ -1152,9 +1152,11 @@ function drawTaskStations(ctx: CanvasRenderingContext2D, state: GameState) {
     ctx.fillText(completed ? 'DONE' : station.label, station.x, station.y + 22);
 
     // Show team tag on station
-    ctx.fillStyle = TEAM_COLORS[station.team];
-    ctx.font = 'bold 9px monospace';
-    ctx.fillText(`▣ ${TEAM_NAMES[station.team]}`, station.x, station.y - 30);
+    if (human.ability !== 'jail' || station.team === human.team) {
+      ctx.fillStyle = TEAM_COLORS[station.team];
+      ctx.font = 'bold 9px monospace';
+      ctx.fillText(`▣ ${TEAM_NAMES[station.team]}`, station.x, station.y - 30);
+    }
 
     if (nearby && human.ability === 'crew' && station.team === human.team && human.alive && !human.frozen && !human.doingTask) {
       ctx.fillStyle = '#ffd700';
@@ -1211,7 +1213,10 @@ function drawPlayer(ctx: CanvasRenderingContext2D, p: Player, human: Player) {
     ctx.setLineDash([]);
   }
 
-  if (p.doingTask) {
+  // Protectors can't tell who is crew/traitor, so hide identity-revealing cues
+  const hideIdentity = human.ability === 'jail' && !p.isHuman && p.team !== human.team && !p.footballTeam;
+
+  if (p.doingTask && !hideIdentity) {
     ctx.beginPath();
     ctx.arc(x, y - 5 * s, 26 * s, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * p.taskProgress);
     ctx.strokeStyle = '#ffd700';
@@ -1247,8 +1252,8 @@ function drawPlayer(ctx: CanvasRenderingContext2D, p: Player, human: Player) {
   ctx.restore();
 
   // Team color banner above head (always visible — factions are public)
-  const teamColor = TEAM_COLORS[p.team];
-  const teamName = p.footballTeam ? p.footballTeam.toUpperCase() : TEAM_NAMES[p.team];
+  const teamColor = hideIdentity ? '#777777' : TEAM_COLORS[p.team];
+  const teamName = hideIdentity ? '???' : (p.footballTeam ? p.footballTeam.toUpperCase() : TEAM_NAMES[p.team]);
   const bannerW = 64, bannerH = 12;
   const bannerY = y - 46 * s;
   ctx.fillStyle = teamColor;
@@ -1730,15 +1735,24 @@ function drawHUD(ctx: CanvasRenderingContext2D, state: GameState, w: number, h: 
   // Faction roster line
   ctx.font = 'bold 11px monospace';
   let xCursor = 10;
+  const protectorView = human.ability === 'jail';
   for (let t = 0; t < 3; t++) {
     if (state.teamCounts[t] === 0) continue;
     const ti = t as TeamIndex;
-    const alive = state.players.filter(p => p.team === ti && p.alive && !p.jailed).length;
-    const jailed = state.players.filter(p => p.team === ti && p.jailed).length;
-    ctx.fillStyle = TEAM_COLORS[ti];
+    // Protectors can't tell crew from traitors: merge them into one "SUSPECTS" chip.
+    if (protectorView && ti !== human.team) {
+      if (ti !== ([0, 1, 2] as TeamIndex[]).find(x => x !== human.team && state.teamCounts[x] > 0)) continue;
+    }
+    const group = protectorView && ti !== human.team
+      ? state.players.filter(p => p.team !== human.team)
+      : state.players.filter(p => p.team === ti);
+    const alive = group.filter(p => p.alive && !p.jailed).length;
+    const jailed = group.filter(p => p.jailed).length;
+    ctx.fillStyle = protectorView && ti !== human.team ? '#777777' : TEAM_COLORS[ti];
     ctx.fillRect(xCursor, 32, 10, 10);
     ctx.fillStyle = '#ddd';
-    const chip = `${TEAM_NAMES[ti]} ${alive}♦${jailed > 0 ? ` ⛓${jailed}` : ''}`;
+    const label = protectorView && ti !== human.team ? 'SUSPECTS' : TEAM_NAMES[ti];
+    const chip = `${label} ${alive}♦${jailed > 0 ? ` ⛓${jailed}` : ''}`;
     ctx.fillText(chip, xCursor + 14, 41);
     xCursor += ctx.measureText(chip).width + 30;
   }
