@@ -6,6 +6,7 @@ import LobbyScreen from '@/components/LobbyScreen';
 import GameSelectScreen from '@/components/GameSelectScreen';
 import FootballTimeScreen from '@/components/FootballTimeScreen';
 import { preloadReferee } from '@/game/preload';
+import { preloadVolleyballAssets } from '@/game/volleyballAssets';
 import VolleyballGame from '@/components/VolleyballGame';
 import VolleyballPointsScreen from '@/components/VolleyballPointsScreen';
 import RoleBanner from '@/components/RoleBanner';
@@ -31,6 +32,8 @@ export default function Index() {
     setUsername(name);
     setDraftName(name);
   }, []);
+
+  useEffect(() => { preloadVolleyballAssets(); }, []);
 
   const handleSaveName = useCallback(() => {
     const name = draftName.trim() || 'Astro';
@@ -77,7 +80,7 @@ export default function Index() {
     );
   }
   if (!gameState && screen === 'volleyPoints') {
-    return <VolleyballPointsScreen onBack={() => setScreen('games')} onPick={(n) => setVolleyTarget(n)} />;
+    return <VolleyballPointsScreen onBack={() => setScreen('games')} onPick={async (n) => { await preloadVolleyballAssets(); setVolleyTarget(n); }} />;
   }
   if (!gameState && screen === 'footballTime') {
     return (

@@ -3,6 +3,7 @@ import crewImg from '@/assets/char-crew-a.png';
 import DraggableExitButton from './DraggableExitButton';
 import RotateDevicePrompt from './RotateDevicePrompt';
 import { useIsMobileDevice, useIsPortrait } from '@/hooks/use-device';
+import { CLOUD_RECTS, preloadVolleyballAssets, volleyballImages } from '@/game/volleyballAssets';
 
 /* ===================== CONSTANTS (world is 1600 x 800) ===================== */
 const W = 1600, H = 800;
@@ -389,22 +390,37 @@ function step(s: VState, inp: Input) {
 }
 
 /* ===================== RENDERING ===================== */
+/* Drifting clouds: [sprite, y (world), height (world), speed px/s, phase 0..1, alpha]. Pure decoration, no physics. */
+const CLOUDS: [number, number, number, number, number, number][] = [
+  [0, 40, 150, 9, 0.05, 0.95], [3, 150, 100, 14, 0.30, 0.9], [5, 70, 70, 20, 0.55, 0.85],
+  [1, 230, 80, 12, 0.80, 0.9], [8, 20, 60, 24, 0.15, 0.8], [4, 300, 70, 16, 0.65, 0.85],
+  [10, 120, 45, 28, 0.92, 0.75], [2, 190, 90, 11, 0.42, 0.9], [6, 260, 55, 22, 0.20, 0.8],
+];
+
 /** Draws the scenery across the WHOLE visible area (x0..x1, y0..y1 in world units), so there are never black bars. */
-function drawBackground(ctx: CanvasRenderingContext2D, x0: number, y0: number, x1: number, y1: number) {
+function drawBackground(ctx: CanvasRenderingContext2D, x0: number, y0: number, x1: number, y1: number, now: number) {
   const top = Math.min(0, y0), bottom = Math.max(H, y1);
-  const sky = ctx.createLinearGradient(0, top, 0, GROUND);
-  sky.addColorStop(0, '#2e7bea'); sky.addColorStop(1, '#8fd0ff');
-  ctx.fillStyle = sky; ctx.fillRect(x0 - 2, top - 2, x1 - x0 + 4, GROUND - top + 2);
-  // crowd (rows continue sideways to fill wide screens)
-  const i0 = Math.floor((x0 - 20) / 20), i1 = Math.ceil((x1 + 20) / 20);
-  for (let row = 0; row < 5; row++) {
-    for (let i = i0; i <= i1; i++) {
-      const hue = (((i * 37 + row * 59) % 3) + 3) % 3;
-      ctx.fillStyle = ['#2a4fa3', '#3a63c4', '#22408a'][hue];
-      ctx.beginPath();
-      ctx.arc(10 + i * 20 + (row % 2) * 10, 420 + row * 22, 9, 0, Math.PI * 2);
-      ctx.fill();
+  const { bg, clouds, ready } = volleyballImages;
+  if (ready) {
+    // ocean + sky image, scaled to cover the whole visible area
+    const vw = x1 - x0, vh = bottom - top;
+    const k = Math.max(vw / bg.naturalWidth, vh / bg.naturalHeight);
+    const dw = bg.naturalWidth * k, dh = bg.naturalHeight * k;
+    ctx.drawImage(bg, x0 + (vw - dw) / 2, top + (vh - dh) / 2, dw, dh);
+    // slow drifting clouds in front of the image, behind the net / players / ball
+    const span = vw + 800;
+    for (const [idx, cy, ch, speed, phase, alpha] of CLOUDS) {
+      const [sx, sy, sw, sh] = CLOUD_RECTS[idx];
+      const cwid = ch * (sw / sh);
+      const x = x0 - 400 + ((phase * span + (now / 1000) * speed) % span) - cwid / 2;
+      ctx.globalAlpha = alpha;
+      ctx.drawImage(clouds, sx, sy, sw, sh, x, cy, cwid, ch);
     }
+    ctx.globalAlpha = 1;
+  } else {
+    const sky = ctx.createLinearGradient(0, top, 0, GROUND);
+    sky.addColorStop(0, '#2e7bea'); sky.addColorStop(1, '#8fd0ff');
+    ctx.fillStyle = sky; ctx.fillRect(x0 - 2, top - 2, x1 - x0 + 4, GROUND - top + 2);
   }
   const floor = ctx.createLinearGradient(0, GROUND, 0, bottom);
   floor.addColorStop(0, '#f0c777'); floor.addColorStop(1, '#c99650');
@@ -593,7 +609,7 @@ function render(ctx: CanvasRenderingContext2D, s: VState, cw: number, ch: number
   ctx.save();
   const now = performance.now();
   // the scenery is drawn over the entire screen; only the playing area stays 1600 x 800
-  drawBackground(ctx, -ox / scale, -oy / scale, (cw - ox) / scale, (ch - oy) / scale);
+  drawBackground(ctx, -ox / scale, -oy / scale, (cw - ox) / scale, (ch - oy) / scale, now);
   drawNet(ctx);
   s.players.forEach(p => drawPlayer(ctx, p, img, now));
   drawBall(ctx, s.ball);
@@ -614,7 +630,7 @@ export default function VolleyballGame({ target, playerName, onExit }: Props) {
   const isMobile = useIsMobileDevice();
   const isPortrait = useIsPortrait();
 
-  useEffect(() => { imgRef.current.src = crewImg; }, []);
+  useEffect(() => { imgRef.current.src = crewImg; preloadVolleyballAssets(); }, []);
   useEffect(() => { const t = setTimeout(() => setBanner(false), 4500); return () => clearTimeout(t); }, []);
 
   // keyboard (desktop)
