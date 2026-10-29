@@ -378,25 +378,28 @@ function step(s: VState, inp: Input) {
 }
 
 /* ===================== RENDERING ===================== */
-function drawBackground(ctx: CanvasRenderingContext2D) {
-  const sky = ctx.createLinearGradient(0, 0, 0, GROUND);
+/** Draws the scenery across the WHOLE visible area (x0..x1, y0..y1 in world units), so there are never black bars. */
+function drawBackground(ctx: CanvasRenderingContext2D, x0: number, y0: number, x1: number, y1: number) {
+  const top = Math.min(0, y0), bottom = Math.max(H, y1);
+  const sky = ctx.createLinearGradient(0, top, 0, GROUND);
   sky.addColorStop(0, '#2e7bea'); sky.addColorStop(1, '#8fd0ff');
-  ctx.fillStyle = sky; ctx.fillRect(0, 0, W, GROUND);
-  // crowd
+  ctx.fillStyle = sky; ctx.fillRect(x0 - 2, top - 2, x1 - x0 + 4, GROUND - top + 2);
+  // crowd (rows continue sideways to fill wide screens)
+  const i0 = Math.floor((x0 - 20) / 20), i1 = Math.ceil((x1 + 20) / 20);
   for (let row = 0; row < 5; row++) {
-    for (let i = 0; i < 80; i++) {
-      const hue = (i * 37 + row * 59) % 3;
+    for (let i = i0; i <= i1; i++) {
+      const hue = (((i * 37 + row * 59) % 3) + 3) % 3;
       ctx.fillStyle = ['#2a4fa3', '#3a63c4', '#22408a'][hue];
       ctx.beginPath();
       ctx.arc(10 + i * 20 + (row % 2) * 10, 420 + row * 22, 9, 0, Math.PI * 2);
       ctx.fill();
     }
   }
-  const floor = ctx.createLinearGradient(0, GROUND, 0, H);
+  const floor = ctx.createLinearGradient(0, GROUND, 0, bottom);
   floor.addColorStop(0, '#f0c777'); floor.addColorStop(1, '#c99650');
-  ctx.fillStyle = floor; ctx.fillRect(0, GROUND, W, H - GROUND);
-  ctx.fillStyle = '#fff'; ctx.fillRect(0, GROUND, W, 5);
-  ctx.fillRect(NET_X - 3, GROUND, 6, H - GROUND);
+  ctx.fillStyle = floor; ctx.fillRect(x0 - 2, GROUND, x1 - x0 + 4, bottom - GROUND + 2);
+  ctx.fillStyle = '#fff'; ctx.fillRect(x0 - 2, GROUND, x1 - x0 + 4, 5);
+  ctx.fillRect(NET_X - 3, GROUND, 6, bottom - GROUND);
 }
 
 function drawNet(ctx: CanvasRenderingContext2D) {
@@ -573,13 +576,13 @@ function drawHUD(ctx: CanvasRenderingContext2D, s: VState) {
 
 function render(ctx: CanvasRenderingContext2D, s: VState, cw: number, ch: number, dpr: number, img: HTMLImageElement) {
   ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.fillStyle = '#05101f'; ctx.fillRect(0, 0, cw * dpr, ch * dpr);
   const scale = Math.min(cw / W, ch / H);
   const ox = (cw - W * scale) / 2, oy = (ch - H * scale) / 2;
   ctx.setTransform(scale * dpr, 0, 0, scale * dpr, ox * dpr, oy * dpr);
-  ctx.save(); ctx.beginPath(); ctx.rect(0, 0, W, H); ctx.clip();
+  ctx.save();
   const now = performance.now();
-  drawBackground(ctx);
+  // the scenery is drawn over the entire screen; only the playing area stays 1600 x 800
+  drawBackground(ctx, -ox / scale, -oy / scale, (cw - ox) / scale, (ch - oy) / scale);
   drawNet(ctx);
   s.players.forEach(p => drawPlayer(ctx, p, img, now));
   drawBall(ctx, s.ball);
