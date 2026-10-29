@@ -267,6 +267,14 @@ function botAI(s: VState, p: VPlayer) {
     }
   }
 
+  // ball is balancing on this bot (almost no speed, touching/above its body): stop chasing it and JUMP to pop it off
+  const stuck = s.phase === 'play' && b.side === p.side && Math.hypot(b.vx, b.vy) < 3 &&
+    Math.abs(b.x - p.x) < BODY_HW + BALL_R + 10 && b.y < p.y && b.y > p.y - BODY_TOP - BALL_R - 40;
+  if (stuck) {
+    targetX = p.x;
+    if (p.onGround) { p.vy = JUMP_V; p.onGround = false; }
+  }
+
   const dx = targetX - p.x;
   p.vx = Math.abs(dx) < 8 ? 0 : Math.sign(dx) * BOT_MOVE;
   p.x = clamp(p.x + p.vx, minX, maxX);
@@ -361,6 +369,9 @@ function step(s: VState, inp: Input) {
       const vn = rvx * c.nx + rvy * c.ny;
       if (vn < 0) {
         b.vx = rvx - 1.6 * vn * c.nx + p.vx; b.vy = rvy - 1.6 * vn * c.ny + p.vy;
+        if (Math.hypot(b.vx, b.vy) < 3.5) {      // ball would just sit on the head: roll it off
+          b.vx = (b.x >= p.x ? 1 : -1) * (3 + Math.random() * 2); b.vy = -4;
+        }
         const sp = Math.hypot(b.vx, b.vy), hard = MAX_BALL_V * 1.45;
         if (sp > hard) { b.vx *= hard / sp; b.vy *= hard / sp; }
       }
