@@ -1084,6 +1084,18 @@ export function updateGame(state: GameState, dt: number, keys: Set<string>, now:
     return { ...state, phase: 'gameover', winner, timeElapsed: state.timeElapsed + dt };
   }
 
+  // Whole team of the human is dead -> show the result straight away (no spectating).
+  const me = state.players[0];
+  if (!state.players.some(p => p.team === me.team && p.alive)) {
+    const standing = ([0, 1, 2] as TeamIndex[]).filter(t =>
+      t !== me.team && state.teamCounts[t] > 0 && state.players.some(p => p.team === t && p.alive));
+    const aliveCount = (t: TeamIndex) => state.players.filter(p => p.team === t && p.alive).length;
+    standing.sort((a, b) =>
+      (state.teamAbilities[b] === 'kill' ? 1000 : 0) + aliveCount(b) -
+      ((state.teamAbilities[a] === 'kill' ? 1000 : 0) + aliveCount(a)));
+    return { ...state, phase: 'gameover', winner: standing[0] ?? null, timeElapsed: state.timeElapsed + dt };
+  }
+
   // If no living jailer remains on any team, free all prisoners (no one to guard them)
   const anyJailerAlive = state.players.some(p => p.ability === 'jail' && p.alive && !p.jailed);
   if (!anyJailerAlive) {

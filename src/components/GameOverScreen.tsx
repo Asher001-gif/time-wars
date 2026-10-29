@@ -54,6 +54,9 @@ export default function GameOverScreen({ state, onRestart }: Props) {
         <h1 className="text-4xl font-bold font-mono tracking-wider" style={{ color }}>
           🏆 {teamName} TEAM WINS!
         </h1>
+        <p className="font-mono font-bold text-xl" style={{ color: state.players[0].team === team ? '#3dba6f' : '#e03030' }}>
+          {state.players[0].team === team ? 'YOU WON!' : 'YOU LOST'}
+        </p>
         <p className="text-muted-foreground font-mono uppercase text-xs tracking-widest">
           Ability: {ability}
         </p>
