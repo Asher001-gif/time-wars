@@ -110,6 +110,32 @@ function bodyContactAt(p: VPlayer, x: number, y: number) {
   return Math.hypot(x - cx, y - cy) < BALL_R;
 }
 
+/** Contact normal + a point just outside the body, for the ball at (x, y). */
+function contact(p: VPlayer, x: number, y: number) {
+  const l = p.x - BODY_HW, r = p.x + BODY_HW, t = p.y - BODY_TOP, bt = p.y + BODY_BOT;
+  const cx = clamp(x, l, r), cy = clamp(y, t, bt);
+  const dx = x - cx, dy = y - cy, d = Math.hypot(dx, dy);
+  if (d > 0.001) return { nx: dx / d, ny: dy / d, px: cx + (dx / d) * (BALL_R + 0.5), py: cy + (dy / d) * (BALL_R + 0.5) };
+  // ball centre is inside the box: leave through the nearest face
+  const m = Math.min(x - l, r - x, y - t, bt - y);
+  if (m === y - t) return { nx: 0, ny: -1, px: x, py: t - BALL_R - 0.5 };
+  if (m === bt - y) return { nx: 0, ny: 1, px: x, py: bt + BALL_R + 0.5 };
+  if (m === x - l) return { nx: -1, ny: 0, px: l - BALL_R - 0.5, py: y };
+  return { nx: 1, ny: 0, px: r + BALL_R + 0.5, py: y };
+}
+
+/** Would a ball launched from (x, y) with this velocity clear the net (or land before it)? */
+function clearsNet(x: number, y: number, vx: number, vy: number) {
+  const sign = Math.sign(NET_X - x);
+  if (sign === 0 || vx * sign <= 0) return true;
+  for (let i = 0; i < 300; i++) {
+    vy += G_B; x += vx; y += vy;
+    if (y + BALL_R >= GROUND) return true;
+    if (sign * (NET_X - x) <= NET_HALF) return y < NET_TOP - BALL_R - 4;
+  }
+  return true;
+}
+
 function inReach(p: VPlayer, b: VBall) {
   return Math.hypot(b.x - p.x, b.y - p.y) < REACH || bodyContactAt(p, b.x, b.y);
 }
@@ -152,6 +178,18 @@ function doHit(s: VState, p: VPlayer, intent: Intent, power = 1) {
     vy = -14.5;
     vx = clamp((tx - b.x) / 92, -12, 12);
   }
+  // blend the aimed hit with real physics: bounce off the contact point + the player's own motion
+  {
+    const c = contact(p, b.x, b.y);
+    const rvx = b.vx - p.vx, rvy = b.vy - p.vy;
+    const vn = rvx * c.nx + rvy * c.ny;
+    let pvx = b.vx, pvy = b.vy;
+    if (vn < 0) { pvx = rvx - 1.8 * vn * c.nx + p.vx; pvy = rvy - 1.8 * vn * c.ny + p.vy; }
+    const w = intent === 'set' ? 0.15 : 0.3;
+    vx = vx * (1 - w) + pvx * w + p.vx * 0.35;
+    vy = vy * (1 - w) + pvy * w + (p.vy < 0 ? p.vy * 0.25 : 0);
+    if (intent !== 'set' && dir * vx < 3) vx = dir * 3;   // never send it backwards
+  }
   // every consecutive hit in a rally makes the ball a little faster
   const boost = Math.min(1 + b.rally * 0.025, 1.4);
   const isSpike = intent !== 'set' && airborne && spikeFits(b, p);
@@ -159,6 +197,10 @@ function doHit(s: VState, p: VPlayer, intent: Intent, power = 1) {
   const cap = MAX_BALL_V * boost;
   const sp = Math.hypot(vx, vy);
   if (sp > cap) { vx *= cap / sp; vy *= cap / sp; }
+  if (intent !== 'set') { let n = 0; while (n++ < 40 && !clearsNet(b.x, b.y, vx, vy)) vy -= 0.7; }
+  const hard = MAX_BALL_V * 1.45;               // absolute speed limit after all blending
+  const sp2 = Math.hypot(vx, vy);
+  if (sp2 > hard) { vx *= hard / sp2; vy *= hard / sp2; }
   b.rally++;
   b.vx = vx; b.vy = vy; b.touches++; b.lastHitter = p.id;
   p.facing = dir;
@@ -275,22 +317,35 @@ function step(s: VState, inp: Input) {
   const side: Side = b.x < NET_X ? 'L' : 'R';
   if (side !== b.side) { b.side = side; b.touches = 0; b.lastHitter = -1; }
 
-  // everyone (you, mate, opponents): ball touching ANY part of the body sends it over / to the mate
+  // everyone (you, mate, opponents): ball touching ANY part of the body is a hit (aimed + physics).
+  // A player who can't touch it (just hit it / 3 touches used) makes it bounce off them like a solid body.
   for (const p of s.players) {
-    if (b.side !== p.side || b.touches >= 3 || b.lastHitter === p.id) continue;
+    if (b.side !== p.side) continue;
     let touched = false;
     for (let k = 0; k <= 4 && !touched; k++) {
       const t = k / 4;
       touched = bodyContactAt(p, px + (b.x - px) * t, py + (b.y - py) * t);
     }
-    if (touched) {
+    if (!touched) continue;
+    if (b.touches < 3 && b.lastHitter !== p.id) {
       const mate = s.players.find(q => q.side === p.side && q.id !== p.id);
       const intent: Intent = p.isHuman
         ? (inp.setHeld && mate && b.touches < 2 ? 'set' : 'over')
         : botIntent(s, p);
       doHit(s, p, intent, p.isHuman ? 1 : 0.7);
-      break;
+    } else {
+      const c = contact(p, b.x, b.y);
+      const rvx = b.vx - p.vx, rvy = b.vy - p.vy;
+      const vn = rvx * c.nx + rvy * c.ny;
+      if (vn < 0) {
+        b.vx = rvx - 1.6 * vn * c.nx + p.vx; b.vy = rvy - 1.6 * vn * c.ny + p.vy;
+        const sp = Math.hypot(b.vx, b.vy), hard = MAX_BALL_V * 1.45;
+        if (sp > hard) { b.vx *= hard / sp; b.vy *= hard / sp; }
+      }
     }
+    const c = contact(p, b.x, b.y);           // push the ball out so it never sits inside a body
+    b.x = clamp(c.px, BALL_R, W - BALL_R); b.y = Math.min(c.py, GROUND - BALL_R);
+    break;
   }
 
   // ball on the ground of a team => other team scores
