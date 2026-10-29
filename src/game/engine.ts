@@ -313,7 +313,7 @@ const NO_ENEMY_SEARCH_DELAY = 4000; // 4s without seeing an enemy → start swee
 
 function aiHunterBehavior(player: Player, visible: Player[], now: number) {
   // Chase any enemy (different team)
-  const enemies = visible.filter(p => p.team !== player.team);
+  const enemies = visible.filter(p => p.team !== player.team && !isKillImmune(player, p));
 
   // Track last time we actually saw an enemy
   if (enemies.length > 0) player.lastEnemySeenAt = now;
@@ -341,7 +341,7 @@ function aiHunterBehavior(player: Player, visible: Player[], now: number) {
   }
 
   // Avoid nearby enemy jailers when there's no kill opportunity yet
-  const nearbyJailer = enemies.find(p => p.ability === 'jail' && dist(player, p) < 160);
+  const nearbyJailer = visible.find(p => p.team !== player.team && p.ability === 'jail' && dist(player, p) < 160);
   if (nearbyJailer && Math.random() < 0.6) {
     const dir = getNavigationDirection(player.x, player.y,
       player.x + (player.x - nearbyJailer.x),
@@ -497,6 +497,11 @@ function releasePlayer(target: Player) {
   target.jailedUntil = 0;
   target.x = JAIL_RELEASE.x + (Math.random() - 0.5) * 80;
   target.y = JAIL_RELEASE.y + (Math.random() - 0.5) * 80;
+}
+
+/** Traitors (kill / shooter) can never harm protectors (jail ability). */
+function isKillImmune(attacker: Player, target: Player): boolean {
+  return (attacker.ability === 'kill' || attacker.ability === 'shooter') && target.ability === 'jail';
 }
 
 /** Attack interception via shields. Returns true if attack was absorbed. */
@@ -786,6 +791,7 @@ function updateBullets(state: GameState, now: number) {
       if (!p.alive || p.jailed) continue;
       if (p.id === proj.ownerId) continue;
       if (p.team === proj.ownerTeam) continue;
+      if (p.ability === 'jail') continue; // protectors can't be shot
       const d = Math.hypot(p.x - cx, p.y - cy);
       if (d < BULLET_HIT_RADIUS + PLAYER_RADIUS - 8) {
         applyAttack(p);
@@ -815,7 +821,7 @@ function performAIActions(player: Player, allPlayers: Player[], state: GameState
     const range = rangeForAbility(player.ability);
     // Melee kill requires same elevation; shooter ignores elevation.
     const candidates = visible.filter(p =>
-      p.team !== player.team && dist(player, p) < range &&
+      p.team !== player.team && !isKillImmune(player, p) && dist(player, p) < range &&
       hasLineOfSight(player.x, player.y, p.x, p.y, state.doors) &&
       (player.ability === 'shooter' || sameElevation(player, p))
     );
@@ -1107,7 +1113,8 @@ function computeWinner(state: GameState): TeamIndex | null {
       const own = state.taskStations.filter(s => s.team === t);
       if (own.length > 0 && own.every(s => s.completed)) return t;
     } else if (ab === 'kill' || ab === 'shooter') {
-      const enemiesAlive = state.players.some(p => p.team !== t && p.alive);
+      // Protectors can't be killed, so traitors only need to eliminate everyone else.
+      const enemiesAlive = state.players.some(p => p.team !== t && p.alive && p.ability !== 'jail');
       if (!enemiesAlive) return t;
     } else if (ab === 'jail') {
       // Win when every enemy is either dead or currently jailed
@@ -1124,7 +1131,7 @@ export function humanKill(state: GameState, now: number): boolean {
   if (human.ability !== 'kill' && human.ability !== 'shooter') return false;
   const range = rangeForAbility(human.ability);
   const targets = state.players.filter(p =>
-    p.alive && p.id !== 0 && !p.jailed && p.team !== human.team &&
+    p.alive && p.id !== 0 && !p.jailed && p.team !== human.team && !isKillImmune(human, p) &&
     dist(human, p) < range &&
     hasLineOfSight(human.x, human.y, p.x, p.y, state.doors) &&
     (human.ability === 'shooter' || sameElevation(human, p))

@@ -11,9 +11,9 @@ export const TEAM_COLORS: Record<TeamIndex, string> = {
 };
 
 export const TEAM_NAMES: Record<TeamIndex, string> = {
-  0: 'BLUE',
-  1: 'RED',
-  2: 'GREEN',
+  0: 'CREW',
+  1: 'TRAITOR',
+  2: 'PROTECTOR',
 };
 
 export type JailTimerOption = 'off' | 10 | 20 | 30 | 'infinity';

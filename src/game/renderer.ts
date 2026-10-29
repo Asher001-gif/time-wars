@@ -1245,8 +1245,8 @@ function drawPlayer(ctx: CanvasRenderingContext2D, p: Player, human: Player) {
 
   // Team color banner above head (always visible — factions are public)
   const teamColor = TEAM_COLORS[p.team];
-  const teamName = TEAM_NAMES[p.team];
-  const bannerW = 52, bannerH = 12;
+  const teamName = p.footballTeam ? p.footballTeam.toUpperCase() : TEAM_NAMES[p.team];
+  const bannerW = 64, bannerH = 12;
   const bannerY = y - 46 * s;
   ctx.fillStyle = teamColor;
   ctx.fillRect(x - bannerW / 2, bannerY, bannerW, bannerH);
@@ -1722,7 +1722,7 @@ function drawHUD(ctx: CanvasRenderingContext2D, state: GameState, w: number, h: 
   ctx.fillStyle = '#fff';
   ctx.font = 'bold 13px monospace';
   ctx.textAlign = 'left';
-  ctx.fillText(`TEAM ${TEAM_NAMES[human.team]} · ${human.ability.toUpperCase()}`, 30, 20);
+  ctx.fillText(`ROLE: ${TEAM_NAMES[human.team]}`, 30, 20);
 
   // Faction roster line
   ctx.font = 'bold 11px monospace';
