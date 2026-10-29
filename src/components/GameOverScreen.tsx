@@ -39,7 +39,11 @@ export default function GameOverScreen({ state, onRestart }: Props) {
   const winner = state.winner as TeamIndex | null;
   const team = winner ?? 0;
   const color = winner !== null ? TEAM_COLORS[team] : '#888';
-  const teamName = winner !== null ? TEAM_NAMES[team] : '—';
+  const winners: TeamIndex[] = state.winners && state.winners.length > 0
+    ? state.winners
+    : (winner !== null ? [winner] : []);
+  const teamName = winners.length > 0 ? winners.map(t => TEAM_NAMES[t]).join(' & ') : '—';
+  const humanWon = winners.includes(state.players[0].team);
   const ability = winner !== null ? state.teamAbilities[team] : '';
   const objectiveText: Record<string, string> = {
     crew: 'Completed all assigned tasks!',
@@ -52,10 +56,10 @@ export default function GameOverScreen({ state, onRestart }: Props) {
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/90 backdrop-blur-sm">
       <div className="text-center space-y-6 p-8 rounded-xl border border-border bg-card shadow-2xl max-w-md">
         <h1 className="text-4xl font-bold font-mono tracking-wider" style={{ color }}>
-          🏆 {teamName} TEAM WINS!
+          🏆 {teamName} {winners.length > 1 ? 'TEAMS WIN!' : 'TEAM WINS!'}
         </h1>
-        <p className="font-mono font-bold text-xl" style={{ color: state.players[0].team === team ? '#3dba6f' : '#e03030' }}>
-          {state.players[0].team === team ? 'YOU WON!' : 'YOU LOST'}
+        <p className="font-mono font-bold text-xl" style={{ color: humanWon ? '#3dba6f' : '#e03030' }}>
+          {humanWon ? 'YOU WON!' : 'YOU LOST'}
         </p>
         <p className="text-muted-foreground font-mono uppercase text-xs tracking-widest">
           Ability: {ability}

@@ -282,6 +282,8 @@ export interface GameState {
   players: Player[];
   phase: 'lobby' | 'playing' | 'gameover';
   winner: TeamIndex | null;
+  /** All winning teams. When CREW wins, PROTECTOR (jail) teams win too. */
+  winners?: TeamIndex[];
   timeElapsed: number;
   mapWidth: number;
   mapHeight: number;

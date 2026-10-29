@@ -195,6 +195,7 @@ export function createGame(settings: GameSettings = DEFAULT_SETTINGS, playerName
     players,
     phase: 'playing',
     winner: null,
+    winners: [],
     timeElapsed: 0,
     mapWidth: MAP_WIDTH,
     mapHeight: MAP_HEIGHT,
@@ -1081,7 +1082,7 @@ export function updateGame(state: GameState, dt: number, keys: Set<string>, now:
   // Dynamic per-team win conditions
   const winner = computeWinner(state);
   if (winner !== null) {
-    return { ...state, phase: 'gameover', winner, timeElapsed: state.timeElapsed + dt };
+    return { ...state, phase: 'gameover', winner, winners: resolveWinners(state, winner), timeElapsed: state.timeElapsed + dt };
   }
 
   // Whole team of the human is dead -> show the result straight away (no spectating).
@@ -1093,7 +1094,8 @@ export function updateGame(state: GameState, dt: number, keys: Set<string>, now:
     standing.sort((a, b) =>
       (state.teamAbilities[b] === 'kill' ? 1000 : 0) + aliveCount(b) -
       ((state.teamAbilities[a] === 'kill' ? 1000 : 0) + aliveCount(a)));
-    return { ...state, phase: 'gameover', winner: standing[0] ?? null, timeElapsed: state.timeElapsed + dt };
+    const fallbackWinner = standing[0] ?? null;
+    return { ...state, phase: 'gameover', winner: fallbackWinner, winners: resolveWinners(state, fallbackWinner), timeElapsed: state.timeElapsed + dt };
   }
 
   // If no living jailer remains on any team, free all prisoners (no one to guard them)
@@ -1105,6 +1107,23 @@ export function updateGame(state: GameState, dt: number, keys: Set<string>, now:
   }
 
   return { ...state, timeElapsed: state.timeElapsed + dt };
+}
+
+/**
+ * Mars Mission rule: if the CREW team wins, the PROTECTOR (jail) team wins with them.
+ * Returns every team that should be counted as a winner.
+ */
+function resolveWinners(state: GameState, winner: TeamIndex | null): TeamIndex[] {
+  if (winner === null) return [];
+  const winners: TeamIndex[] = [winner];
+  if (state.teamAbilities[winner] === 'crew') {
+    for (const t of [0, 1, 2] as TeamIndex[]) {
+      if (t !== winner && state.teamAbilities[t] === 'jail' && state.teamCounts[t] > 0) {
+        winners.push(t);
+      }
+    }
+  }
+  return winners;
 }
 
 function computeWinner(state: GameState): TeamIndex | null {
