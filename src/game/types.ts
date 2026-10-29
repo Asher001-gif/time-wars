@@ -311,6 +311,7 @@ export interface GameState {
   lastGoalAt?: number; // freeze movement briefly after a goal
   goalFlash?: { team: 'red' | 'blue' | 'tie'; time: number } | null;
   roundStartedAt?: number; // performance.now() when current football round began
+  spectateId?: number;     // player the camera follows after the human dies (Mars)
   matchStartedAt?: number; // performance.now() when the football match began
   ballIdleX?: number;      // ball anchor for the 7s "same position" rule
   ballIdleY?: number;

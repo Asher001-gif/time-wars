@@ -1,3 +1,4 @@
+import { getViewTarget } from './spectate';
 import { GameState, Player, PLAYER_RADIUS, TASK_RANGE, FreezeProjectile, JAIL_RECT, JAIL_DURATION, DOOR_INTERACT_RANGE, TEAM_COLORS, TEAM_NAMES, TeamIndex, Platform, BUILDER_BLOCK_LIFETIME } from './types';
 import { Powerup, POWERUP_RADIUS } from './types';
 import { ROOM_WALLS, OBSTACLES, ROOMS, SHELTERS, BILLBOARDS } from './collision';
@@ -50,8 +51,10 @@ export function renderGame(
   }
 
   const human = state.players[0];
-  const camX = Math.max(0, Math.min(state.mapWidth - canvasW, human.x - canvasW / 2));
-  const camY = Math.max(0, Math.min(state.mapHeight - canvasH, human.y - canvasH / 2));
+  // When dead, the camera + fog follow a surviving teammate.
+  const view = getViewTarget(state);
+  const camX = Math.max(0, Math.min(state.mapWidth - canvasW, view.x - canvasW / 2));
+  const camY = Math.max(0, Math.min(state.mapHeight - canvasH, view.y - canvasH / 2));
 
   ctx.save();
   ctx.clearRect(0, 0, canvasW, canvasH);
@@ -99,9 +102,9 @@ export function renderGame(
   ctx.restore();
 
   // Draw fog of war overlay
-  const visionR = VISION_RADIUS[human.ability] || 220;
-  const screenX = human.x - camX;
-  const screenY = human.y - camY;
+  const visionR = VISION_RADIUS[view.ability] || 220;
+  const screenX = view.x - camX;
+  const screenY = view.y - camY;
 
   // Create radial gradient mask: clear center -> dark edges
   const fogGrad = ctx.createRadialGradient(screenX, screenY, visionR * 0.5, screenX, screenY, visionR);
@@ -1776,7 +1779,8 @@ function drawHUD(ctx: CanvasRenderingContext2D, state: GameState, w: number, h: 
   if (!human.alive) {
     ctx.fillStyle = '#ff3333';
     ctx.textAlign = 'right';
-    ctx.fillText('☠ DEAD - Spectating', w - 15, 40);
+    const watching = getViewTarget(state);
+    ctx.fillText(watching.id !== 0 ? `☠ DEAD - Spectating ${watching.name} (◀ ▶ switch)` : '☠ DEAD', w - 15, 40);
   } else if (human.jailed) {
     const remaining = Math.max(0, Math.ceil((human.jailedUntil - performance.now()) / 1000));
     ctx.fillStyle = '#ffaa33';

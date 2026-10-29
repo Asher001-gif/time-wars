@@ -1,6 +1,7 @@
 import { useRef, useEffect, useCallback, useState } from 'react';
 import { GameState, ARREST_RANGE, DOOR_USE_COOLDOWN } from '@/game/types';
 import { updateGame, humanKill, humanArrest, getNearbyTask, getNearbyDoor, toggleDoor, rangeForAbility, placeBuilderBlock } from '@/game/engine';
+import { cycleSpectate } from '@/game/spectate';
 import { generateTaskChallenge } from '@/game/tasks';
 import { renderGame } from '@/game/renderer';
 import TaskOverlay from './TaskOverlay';
@@ -77,6 +78,13 @@ export default function GameCanvas({ gameState, setGameState, onExit }: Props) {
 
     const key = e.key.toLowerCase();
     if (down) {
+      // Dead: arrows / A-D switch which surviving teammate we spectate.
+      const meDead = !stateRef.current.players[0].alive && stateRef.current.mode !== 'football';
+      if (meDead && (key === 'arrowleft' || key === 'a' || key === 'arrowright' || key === 'd')) {
+        cycleSpectate(stateRef.current, key === 'arrowleft' || key === 'a' ? -1 : 1);
+        setGameState({ ...stateRef.current });
+        return;
+      }
       keysRef.current.add(key);
       if (key === ' ' || key === 'space') {
         e.preventDefault();
@@ -333,8 +341,14 @@ export default function GameCanvas({ gameState, setGameState, onExit }: Props) {
         className="block"
         style={{ cursor: isMobile ? 'none' : 'default', touchAction: 'none' }}
         onClick={() => {
-          if (isMobile) return;
           const s = stateRef.current;
+          // Dead (tap / click): next teammate to spectate.
+          if (!s.players[0].alive && s.mode !== 'football') {
+            cycleSpectate(s, 1);
+            setGameState({ ...s });
+            return;
+          }
+          if (isMobile) return;
           const now = performance.now();
           const ab = s.players[0].ability;
           if (ab === 'kill' || ab === 'shooter') humanKill(s, now);
