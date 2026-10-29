@@ -16,6 +16,8 @@ const JUMP_V = -17.5;
 const MOVE = 6.2;               // human speed (medium)
 const BOT_MOVE = 5.8;
 const BODY_HW = 48, BODY_TOP = 60, BODY_BOT = 48; // body box around player centre (head to feet)
+const METER_GAIN = 25;          // % of the power meter each hit fills (4 hits = full)
+const POWER_SPEED = 27;         // speed of a full-meter lightning shot
 const REACH = 105;              // how far a player can hit the ball
 const MAX_BALL_V = 17;
 const DT = 1000 / 60;
@@ -30,9 +32,9 @@ type Intent = 'set' | 'attack' | 'over';
 interface VPlayer {
   id: number; side: Side; isHuman: boolean; name: string;
   x: number; y: number; vx: number; vy: number; onGround: boolean;
-  facing: number; willMiss: boolean; react: number; wasInReach: boolean;
+  facing: number; willMiss: boolean; react: number; wasInReach: boolean; meter: number;
 }
-interface VBall { x: number; y: number; vx: number; vy: number; rot: number; side: Side; touches: number; lastHitter: number; rally: number }
+interface VBall { x: number; y: number; vx: number; vy: number; rot: number; side: Side; touches: number; lastHitter: number; rally: number; fire: boolean; trail: { x: number; y: number }[] }
 interface VState {
   players: VPlayer[]; ball: VBall;
   score: { L: number; R: number };
@@ -57,7 +59,7 @@ function bounds(side: Side) {
 function makePlayer(id: number, side: Side, slot: number, isHuman: boolean, name: string): VPlayer {
   return {
     id, side, isHuman, name, x: homeX(side, slot), y: STAND_Y, vx: 0, vy: 0, onGround: true,
-    facing: dirOf(side), willMiss: false, react: 0, wasInReach: false,
+    facing: dirOf(side), willMiss: false, react: 0, wasInReach: false, meter: 0,
   };
 }
 
@@ -71,7 +73,7 @@ function createVolleyball(target: number, playerName: string): VState {
     makePlayer(3, other, 1, false, 'Opponent'),
   ];
   const s: VState = {
-    players, ball: { x: 0, y: 0, vx: 0, vy: 0, rot: 0, side: 'L', touches: 0, lastHitter: -1, rally: 0 },
+    players, ball: { x: 0, y: 0, vx: 0, vy: 0, rot: 0, side: 'L', touches: 0, lastHitter: -1, rally: 0, fire: false, trail: [] },
     score: { L: 0, R: 0 }, phase: 'serve', t: 0, until: 0, serveSide: Math.random() < 0.5 ? 'L' : 'R',
     pointMsg: '', target, humanSide, reported: false,
   };
@@ -86,7 +88,7 @@ function startServe(s: VState) {
     p.willMiss = false; p.react = 0; p.wasInReach = false;
   });
   const x = s.serveSide === 'L' ? NET_X - 380 : NET_X + 380;
-  s.ball = { x, y: 300, vx: 0, vy: 0, rot: 0, side: s.serveSide, touches: 0, lastHitter: -1, rally: 0 };
+  s.ball = { x, y: 300, vx: 0, vy: 0, rot: 0, side: s.serveSide, touches: 0, lastHitter: -1, rally: 0, fire: false, trail: [] };
   s.phase = 'serve';
   s.until = s.t + 1400;
 }
@@ -158,6 +160,19 @@ function doHit(s: VState, p: VPlayer, intent: Intent, power = 1) {
   const b = s.ball;
   const dir = dirOf(p.side);
   const airborne = p.y < STAND_Y - 30;
+  // FULL METER => lightning shot: very fast, straight toward the other side (as flat as the net allows)
+  if (intent !== 'set' && p.meter >= 100) {
+    let vx = dir * POWER_SPEED * 0.95, vy = -POWER_SPEED * 0.1;
+    for (let ang = -0.3; ang <= 1.2; ang += 0.04) {
+      vx = dir * POWER_SPEED * Math.cos(ang); vy = -POWER_SPEED * Math.sin(ang);
+      if (clearsNet(b.x, b.y, vx, vy)) break;
+    }
+    b.vx = vx; b.vy = vy; b.touches++; b.lastHitter = p.id; b.rally++;
+    b.fire = true; b.trail = []; p.meter = 0; p.facing = dir;
+    return;
+  }
+  p.meter = Math.min(100, p.meter + METER_GAIN);
+  b.fire = false; b.trail = [];
   let vx: number, vy: number;
   if (intent === 'set') {
     // soft lob toward the net-side spot where the teammate can spike it
@@ -298,6 +313,7 @@ function step(s: VState, inp: Input) {
   const px = b.x, py = b.y;
   b.vy += G_B; b.x += b.vx; b.y += b.vy;
   b.rot += b.vx * 0.04;
+  if (b.fire) { b.trail.push({ x: b.x, y: b.y }); if (b.trail.length > 14) b.trail.shift(); }
   if (b.x < BALL_R) { b.x = BALL_R; b.vx = Math.abs(b.vx) * 0.8; }
   if (b.x > W - BALL_R) { b.x = W - BALL_R; b.vx = -Math.abs(b.vx) * 0.8; }
 
@@ -396,8 +412,63 @@ function shadow(ctx: CanvasRenderingContext2D, x: number, height: number, w: num
   ctx.beginPath(); ctx.ellipse(x, GROUND + 14, w * k, 9 * k, 0, 0, Math.PI * 2); ctx.fill();
 }
 
+function lightning(ctx: CanvasRenderingContext2D, pts: { x: number; y: number }[], jitter: number) {
+  ctx.beginPath();
+  pts.forEach((q, i) => {
+    const jx = i === 0 || i === pts.length - 1 ? 0 : (Math.random() - 0.5) * jitter;
+    const jy = i === 0 || i === pts.length - 1 ? 0 : (Math.random() - 0.5) * jitter;
+    if (i === 0) ctx.moveTo(q.x + jx, q.y + jy); else ctx.lineTo(q.x + jx, q.y + jy);
+  });
+  ctx.stroke();
+}
+
+function drawLightning(ctx: CanvasRenderingContext2D, b: VBall) {
+  ctx.save();
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  ctx.shadowColor = '#7fe7ff'; ctx.shadowBlur = 22;
+  // glowing aura
+  ctx.fillStyle = 'rgba(255,240,120,0.35)';
+  ctx.beginPath(); ctx.arc(b.x, b.y, BALL_R + 12 + Math.random() * 6, 0, Math.PI * 2); ctx.fill();
+  // crackling trail behind the ball
+  const trail = [...b.trail, { x: b.x, y: b.y }];
+  if (trail.length > 1) {
+    ctx.strokeStyle = 'rgba(80,200,255,0.55)'; ctx.lineWidth = 10; lightning(ctx, trail, 26);
+    ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 4; lightning(ctx, trail, 22);
+  }
+  // bolts thrown forward in the shot direction
+  const base = Math.atan2(b.vy, b.vx);
+  for (let k = 0; k < 5; k++) {
+    const ang = base + (Math.random() - 0.5) * 1.3;
+    const len = 50 + Math.random() * 70;
+    const pts = [{ x: b.x, y: b.y }];
+    for (let i = 1; i <= 4; i++) {
+      const d = (len * i) / 4;
+      pts.push({ x: b.x + Math.cos(ang) * d + (Math.random() - 0.5) * 16, y: b.y + Math.sin(ang) * d + (Math.random() - 0.5) * 16 });
+    }
+    ctx.strokeStyle = k % 2 ? '#fff6a8' : '#b8f1ff'; ctx.lineWidth = 3; lightning(ctx, pts, 0);
+  }
+  ctx.restore();
+}
+
+function drawMeter(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, v: number, t: number) {
+  const full = v >= 100, f = clamp(v, 0, 100) / 100;
+  ctx.save();
+  ctx.fillStyle = 'rgba(0,0,0,0.7)'; ctx.fillRect(x - 2, y - 2, w + 4, h + 4);
+  const g = ctx.createLinearGradient(x, 0, x + w, 0);
+  g.addColorStop(0, '#2fd0ff'); g.addColorStop(1, '#ffe14a');
+  ctx.fillStyle = g; ctx.fillRect(x, y, w * f, h);
+  if (full) {
+    const pulse = 0.5 + 0.5 * Math.sin(t * 0.02);
+    ctx.shadowColor = '#ffe14a'; ctx.shadowBlur = 14;
+    ctx.strokeStyle = `rgba(255,255,255,${0.6 + 0.4 * pulse})`; ctx.lineWidth = 2;
+    ctx.strokeRect(x - 2, y - 2, w + 4, h + 4);
+  }
+  ctx.restore();
+}
+
 function drawBall(ctx: CanvasRenderingContext2D, b: VBall) {
   shadow(ctx, b.x, GROUND - b.y, BALL_R);
+  if (b.fire) drawLightning(ctx, b);
   ctx.save();
   ctx.translate(b.x, b.y); ctx.rotate(b.rot);
   ctx.beginPath(); ctx.arc(0, 0, BALL_R, 0, Math.PI * 2);
@@ -441,9 +512,10 @@ function drawPlayer(ctx: CanvasRenderingContext2D, p: VPlayer, img: HTMLImageEle
   const wTag = ctx.measureText(label).width + 16;
   ctx.fillStyle = col; ctx.fillRect(p.x - wTag / 2, p.y - 98, wTag, 20);
   ctx.fillStyle = '#fff'; ctx.fillText(label, p.x, p.y - 83);
+  drawMeter(ctx, p.x - 35, p.y - 114, 70, 8, p.meter, t);
   if (p.isHuman) {
     ctx.fillStyle = '#ffe14a';
-    ctx.beginPath(); ctx.moveTo(p.x - 9, p.y - 118); ctx.lineTo(p.x + 9, p.y - 118); ctx.lineTo(p.x, p.y - 104); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(p.x - 9, p.y - 138); ctx.lineTo(p.x + 9, p.y - 138); ctx.lineTo(p.x, p.y - 124); ctx.fill();
   }
 }
 
@@ -456,6 +528,16 @@ function drawHUD(ctx: CanvasRenderingContext2D, s: VState) {
   ctx.fillStyle = COLORS.R; ctx.fillText(`${s.score.R} RED`, W / 2 + 110, 58);
   ctx.font = 'bold 15px monospace'; ctx.fillStyle = '#ffe46a';
   ctx.fillText(`FIRST TO ${s.target}`, W / 2, 80);
+
+  const me = s.players.find(q => q.isHuman);
+  if (me) {
+    const now = performance.now(), full = me.meter >= 100;
+    ctx.font = 'bold 16px monospace'; ctx.textAlign = 'center';
+    ctx.fillStyle = full ? '#ffe14a' : '#fff'; ctx.strokeStyle = '#000'; ctx.lineWidth = 4;
+    const label = full ? '⚡ POWER READY — NEXT HIT IS A LIGHTNING SHOT ⚡' : `POWER ${Math.floor(me.meter)}%`;
+    ctx.strokeText(label, W / 2, 752); ctx.fillText(label, W / 2, 752);
+    drawMeter(ctx, W / 2 - 160, 760, 320, 20, me.meter, now);
+  }
 
   if (s.phase === 'play') {
     const b = s.ball;
