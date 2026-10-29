@@ -32,7 +32,7 @@ type Intent = 'set' | 'attack' | 'over';
 interface VPlayer {
   id: number; side: Side; isHuman: boolean; name: string;
   x: number; y: number; vx: number; vy: number; onGround: boolean;
-  facing: number; willMiss: boolean; react: number; wasInReach: boolean; meter: number;
+  facing: number; willMiss: boolean; react: number; wasInReach: boolean; meter: number; armed: boolean;
 }
 interface VBall { x: number; y: number; vx: number; vy: number; rot: number; side: Side; touches: number; lastHitter: number; rally: number; fire: boolean; trail: { x: number; y: number }[] }
 interface VState {
@@ -42,7 +42,7 @@ interface VState {
   t: number; until: number; serveSide: Side; pointMsg: string;
   target: number; humanSide: Side; reported: boolean;
 }
-interface Input { left: boolean; right: boolean; jumpBuf: number; hitBuf: number; setHeld: boolean }
+interface Input { left: boolean; right: boolean; jumpBuf: number; hitBuf: number; setHeld: boolean; powerBuf: number }
 
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 const dirOf = (s: Side) => (s === 'L' ? 1 : -1);
@@ -59,7 +59,7 @@ function bounds(side: Side) {
 function makePlayer(id: number, side: Side, slot: number, isHuman: boolean, name: string): VPlayer {
   return {
     id, side, isHuman, name, x: homeX(side, slot), y: STAND_Y, vx: 0, vy: 0, onGround: true,
-    facing: dirOf(side), willMiss: false, react: 0, wasInReach: false, meter: 0,
+    facing: dirOf(side), willMiss: false, react: 0, wasInReach: false, meter: 0, armed: false,
   };
 }
 
@@ -161,14 +161,14 @@ function doHit(s: VState, p: VPlayer, intent: Intent, power = 1) {
   const dir = dirOf(p.side);
   const airborne = p.y < STAND_Y - 30;
   // FULL METER => lightning shot: very fast, straight toward the other side (as flat as the net allows)
-  if (intent !== 'set' && p.meter >= 100) {
+  if (intent !== 'set' && p.meter >= 100 && (p.armed || !p.isHuman)) {
     let vx = dir * POWER_SPEED * 0.95, vy = -POWER_SPEED * 0.1;
     for (let ang = -0.3; ang <= 1.2; ang += 0.04) {
       vx = dir * POWER_SPEED * Math.cos(ang); vy = -POWER_SPEED * Math.sin(ang);
       if (clearsNet(b.x, b.y, vx, vy)) break;
     }
     b.vx = vx; b.vy = vy; b.touches++; b.lastHitter = p.id; b.rally++;
-    b.fire = true; b.trail = []; p.meter = 0; p.facing = dir;
+    b.fire = true; b.trail = []; p.meter = 0; p.armed = false; p.facing = dir;
     return;
   }
   p.meter = Math.min(100, p.meter + METER_GAIN);
@@ -279,6 +279,7 @@ function humanControl(s: VState, p: VPlayer, inp: Input) {
   p.vx = dx * MOVE;
   p.x = clamp(p.x + p.vx, minX, maxX);
   if (dx !== 0) p.facing = dx;
+  if (inp.powerBuf > 0) { if (p.meter >= 100) p.armed = true; inp.powerBuf = 0; }
   if (inp.jumpBuf > 0 && p.onGround) { p.vy = JUMP_V; p.onGround = false; inp.jumpBuf = 0; }
   if (inp.hitBuf > 0 && canHit(s, p)) {
     const b = s.ball;
@@ -294,6 +295,7 @@ function step(s: VState, inp: Input) {
   s.t += DT;
   if (inp.jumpBuf > 0) inp.jumpBuf--;
   if (inp.hitBuf > 0) inp.hitBuf--;
+  if (inp.powerBuf > 0) inp.powerBuf--;
   if (s.phase === 'over') return;
 
   if (s.phase === 'point') {
@@ -512,6 +514,11 @@ function drawPlayer(ctx: CanvasRenderingContext2D, p: VPlayer, img: HTMLImageEle
   const wTag = ctx.measureText(label).width + 16;
   ctx.fillStyle = col; ctx.fillRect(p.x - wTag / 2, p.y - 98, wTag, 20);
   ctx.fillStyle = '#fff'; ctx.fillText(label, p.x, p.y - 83);
+  if (p.armed) {
+    ctx.save(); ctx.shadowColor = '#ffe14a'; ctx.shadowBlur = 24;
+    ctx.strokeStyle = `rgba(255,225,74,${0.6 + 0.4 * Math.sin(t * 0.03)})`; ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.ellipse(p.x, p.y - 6, 62, 70, 0, 0, Math.PI * 2); ctx.stroke(); ctx.restore();
+  }
   // your meter is always shown; a bot's meter only appears once it is full (lightning shot incoming)
   if (p.isHuman || p.meter >= 100) drawMeter(ctx, p.x - 35, p.y - 114, 70, 8, p.meter, t);
   if (p.isHuman) {
@@ -535,7 +542,7 @@ function drawHUD(ctx: CanvasRenderingContext2D, s: VState) {
     const now = performance.now(), full = me.meter >= 100;
     ctx.font = 'bold 16px monospace'; ctx.textAlign = 'center';
     ctx.fillStyle = full ? '#ffe14a' : '#fff'; ctx.strokeStyle = '#000'; ctx.lineWidth = 4;
-    const label = full ? '⚡ POWER READY — NEXT HIT IS A LIGHTNING SHOT ⚡' : `POWER ${Math.floor(me.meter)}%`;
+    const label = full ? (me.armed ? '⚡ POWER ARMED — HIT THE BALL! ⚡' : '⚡ POWER READY — PRESS 5 ⚡') : `POWER ${Math.floor(me.meter)}%`;
     ctx.strokeText(label, W / 2, 752); ctx.fillText(label, W / 2, 752);
     drawMeter(ctx, W / 2 - 160, 760, 320, 20, me.meter, now);
   }
@@ -582,7 +589,7 @@ interface Props { target: number; playerName: string; onExit: () => void }
 export default function VolleyballGame({ target, playerName, onExit }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const stateRef = useRef<VState>(createVolleyball(target, playerName));
-  const inputRef = useRef<Input>({ left: false, right: false, jumpBuf: 0, hitBuf: 0, setHeld: false });
+  const inputRef = useRef<Input>({ left: false, right: false, jumpBuf: 0, hitBuf: 0, setHeld: false, powerBuf: 0 });
   const imgRef = useRef<HTMLImageElement>(new Image());
   const [banner, setBanner] = useState(true);
   const [result, setResult] = useState<null | { won: boolean; l: number; r: number }>(null);
@@ -600,6 +607,7 @@ export default function VolleyballGame({ target, playerName, onExit }: Props) {
       if (k === 'a' || k === 'arrowleft') i.left = true;
       else if (k === 'd' || k === 'arrowright') i.right = true;
       else if (k === 's' || k === 'arrowdown') i.setHeld = true;
+      else if (k === '5' && !e.repeat) i.powerBuf = 10;
       else if ((k === 'w' || k === 'arrowup') && !e.repeat) { i.jumpBuf = 8; e.preventDefault(); }
       else if ((k === ' ' || k === 'k' || k === 'enter') && !e.repeat) { i.hitBuf = 10; e.preventDefault(); }
     };
@@ -695,8 +703,8 @@ export default function VolleyballGame({ target, playerName, onExit }: Props) {
             You are {NAMES[mySide]} TEAM. Land the ball on the {enemy} side to win.
             <div className="text-xs sm:text-base font-normal mt-2 opacity-80">
               {isMobile
-                ? 'JUMP then HIT = hard spike • SET = pass to your mate'
-                : 'A/D move • W jump • SPACE hit (jump first = hard spike) • hold S + SPACE = set for your mate'}
+                ? 'JUMP then HIT = hard spike • SET = pass to your mate • ⚡ = lightning shot when POWER is full'
+                : 'A/D move • W jump • SPACE hit (jump first = hard spike) • hold S + SPACE = set for your mate • 5 = lightning shot when POWER is full'}
             </div>
           </div>
         </div>
@@ -708,6 +716,7 @@ export default function VolleyballGame({ target, playerName, onExit }: Props) {
           {btn('▶', { bottom: 40, left: 116 }, () => { inputRef.current.right = true; }, () => { inputRef.current.right = false; })}
           {btn('JUMP', { bottom: 40, right: 116, background: 'rgba(74,144,217,0.8)' }, () => { inputRef.current.jumpBuf = 8; })}
           {btn('HIT', { bottom: 40, right: 24, background: 'rgba(224,48,48,0.85)' }, () => { inputRef.current.hitBuf = 10; })}
+          {btn('⚡', { bottom: 130, right: 150, width: 62, height: 62, fontSize: 24, background: 'rgba(255,200,40,0.85)' }, () => { inputRef.current.powerBuf = 10; })}
           {btn('SET', { bottom: 130, right: 70, width: 62, height: 62, background: 'rgba(61,186,111,0.85)' },
             () => { inputRef.current.setHeld = true; inputRef.current.hitBuf = 10; }, () => { inputRef.current.setHeld = false; })}
         </div>
