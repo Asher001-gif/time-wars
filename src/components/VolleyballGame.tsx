@@ -32,7 +32,7 @@ interface VPlayer {
   x: number; y: number; vx: number; vy: number; onGround: boolean;
   facing: number; willMiss: boolean; react: number; wasInReach: boolean;
 }
-interface VBall { x: number; y: number; vx: number; vy: number; rot: number; side: Side; touches: number; lastHitter: number }
+interface VBall { x: number; y: number; vx: number; vy: number; rot: number; side: Side; touches: number; lastHitter: number; rally: number }
 interface VState {
   players: VPlayer[]; ball: VBall;
   score: { L: number; R: number };
@@ -71,7 +71,7 @@ function createVolleyball(target: number, playerName: string): VState {
     makePlayer(3, other, 1, false, 'Opponent'),
   ];
   const s: VState = {
-    players, ball: { x: 0, y: 0, vx: 0, vy: 0, rot: 0, side: 'L', touches: 0, lastHitter: -1 },
+    players, ball: { x: 0, y: 0, vx: 0, vy: 0, rot: 0, side: 'L', touches: 0, lastHitter: -1, rally: 0 },
     score: { L: 0, R: 0 }, phase: 'serve', t: 0, until: 0, serveSide: Math.random() < 0.5 ? 'L' : 'R',
     pointMsg: '', target, humanSide, reported: false,
   };
@@ -86,7 +86,7 @@ function startServe(s: VState) {
     p.willMiss = false; p.react = 0; p.wasInReach = false;
   });
   const x = s.serveSide === 'L' ? NET_X - 380 : NET_X + 380;
-  s.ball = { x, y: 300, vx: 0, vy: 0, rot: 0, side: s.serveSide, touches: 0, lastHitter: -1 };
+  s.ball = { x, y: 300, vx: 0, vy: 0, rot: 0, side: s.serveSide, touches: 0, lastHitter: -1, rally: 0 };
   s.phase = 'serve';
   s.until = s.t + 1400;
 }
@@ -152,8 +152,14 @@ function doHit(s: VState, p: VPlayer, intent: Intent, power = 1) {
     vy = -14.5;
     vx = clamp((tx - b.x) / 92, -12, 12);
   }
+  // every consecutive hit in a rally makes the ball a little faster
+  const boost = Math.min(1 + b.rally * 0.025, 1.4);
+  const isSpike = intent !== 'set' && airborne && spikeFits(b, p);
+  vx *= boost; if (!isSpike) vy *= boost; // spike keeps its net-clearing angle
+  const cap = MAX_BALL_V * boost;
   const sp = Math.hypot(vx, vy);
-  if (sp > MAX_BALL_V) { vx *= MAX_BALL_V / sp; vy *= MAX_BALL_V / sp; }
+  if (sp > cap) { vx *= cap / sp; vy *= cap / sp; }
+  b.rally++;
   b.vx = vx; b.vy = vy; b.touches++; b.lastHitter = p.id;
   p.facing = dir;
 }
@@ -269,15 +275,22 @@ function step(s: VState, inp: Input) {
   const side: Side = b.x < NET_X ? 'L' : 'R';
   if (side !== b.side) { b.side = side; b.touches = 0; b.lastHitter = -1; }
 
-  // bots (mates + opponents): ball touching ANY part of the body sends it over / to the mate
+  // everyone (you, mate, opponents): ball touching ANY part of the body sends it over / to the mate
   for (const p of s.players) {
-    if (p.isHuman || b.side !== p.side || b.touches >= 3 || b.lastHitter === p.id) continue;
+    if (b.side !== p.side || b.touches >= 3 || b.lastHitter === p.id) continue;
     let touched = false;
     for (let k = 0; k <= 4 && !touched; k++) {
       const t = k / 4;
       touched = bodyContactAt(p, px + (b.x - px) * t, py + (b.y - py) * t);
     }
-    if (touched) { doHit(s, p, botIntent(s, p), 0.7); break; }
+    if (touched) {
+      const mate = s.players.find(q => q.side === p.side && q.id !== p.id);
+      const intent: Intent = p.isHuman
+        ? (inp.setHeld && mate && b.touches < 2 ? 'set' : 'over')
+        : botIntent(s, p);
+      doHit(s, p, intent, p.isHuman ? 1 : 0.7);
+      break;
+    }
   }
 
   // ball on the ground of a team => other team scores
