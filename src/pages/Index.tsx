@@ -59,7 +59,10 @@ export default function Index() {
     return (
       <GameSelectScreen
         onBack={() => setScreen('lobby')}
-        onPlay={(g) => (g === 'mars' ? handleStart(MARS_SETTINGS) : setScreen('footballTime'))}
+        onPlay={(g) => {
+          if (g === 'mars') handleStart(MARS_SETTINGS);
+          else if (g === 'football') setScreen('footballTime');
+        }}
       />
     );
   }
