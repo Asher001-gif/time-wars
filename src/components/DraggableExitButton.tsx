@@ -7,8 +7,15 @@ interface Props {
 const DRAG_THRESHOLD = 6; // px before a press becomes a drag
 const STORAGE_KEY = 'timewars.exitBtnPos';
 
+const STEPS = [
+  { icon: '💔', title: 'Is it over for us and you??', sub: 'After everything we have been through.', yes: 'Yes', no: 'No' },
+  { icon: '🔥', title: 'Never give up dude!', sub: 'Legends do not rage quit. You sure about this?', yes: 'Yes, I quit', no: 'No, I am back' },
+  { icon: '👑', title: 'Fine. But this game was lucky to have you.', sub: 'Without you, nobody is the main character.', yes: 'Exit anyway', no: 'Stay, champ' },
+];
+
 export default function DraggableExitButton({ onExit }: Props) {
   const btnRef = useRef<HTMLButtonElement>(null);
+  const [step, setStep] = useState<number | null>(null);
   const [pos, setPos] = useState<{ x: number; y: number }>(() => {
     if (typeof window === 'undefined') return { x: 12, y: 12 };
     try {
@@ -75,13 +82,36 @@ export default function DraggableExitButton({ onExit }: Props) {
     if (wasDrag) {
       try { localStorage.setItem(STORAGE_KEY, JSON.stringify(pos)); } catch {}
     } else {
-      // Treat as tap → exit
-      if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
-      onExit();
+      // Treat as tap → ask for confirmation first
+      setStep(0);
     }
   };
 
+  const confirmExit = () => {
+    setStep(null);
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    onExit();
+  };
+
+  const onYes = () => {
+    if (step === null) return;
+    if (step < STEPS.length - 1) setStep(step + 1);
+    else confirmExit();
+  };
+
+  useEffect(() => {
+    if (step === null) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setStep(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [step]);
+
+  const cur = step !== null ? STEPS[step] : null;
+
   return (
+    <>
     <button
       ref={btnRef}
       onPointerDown={onPointerDown}
@@ -100,5 +130,38 @@ export default function DraggableExitButton({ onExit }: Props) {
     >
       ⬅ Exit
     </button>
+    {cur && (
+      <div
+        className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4"
+        onPointerDown={e => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label={cur.title}
+      >
+        <div className="w-full max-w-sm rounded-xl border border-border bg-card p-6 text-center shadow-2xl space-y-4">
+          <div className="text-4xl">{cur.icon}</div>
+          <div>
+            <p className="font-mono font-bold text-lg">{cur.title}</p>
+            <p className="font-mono text-sm text-muted-foreground mt-1">{cur.sub}</p>
+          </div>
+          <div className="flex gap-3">
+            <button
+              onClick={onYes}
+              className="flex-1 px-4 py-2 rounded-lg border border-border font-mono text-sm hover:bg-muted"
+            >
+              {cur.yes}
+            </button>
+            <button
+              autoFocus
+              onClick={() => setStep(null)}
+              className="flex-1 px-4 py-2 rounded-lg font-mono text-sm font-bold bg-primary text-primary-foreground hover:opacity-90"
+            >
+              {cur.no}
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+    </>
   );
 }
