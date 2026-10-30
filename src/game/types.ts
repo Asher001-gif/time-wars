@@ -194,6 +194,8 @@ export interface Player {
   builderCharges?: number;
   stunnedUntil?: number;    // EMP / meteor stun: can't move or attack
   radarUntil?: number;      // radar power-up: shows every player on screen
+  escapeCards?: number;     // traitor 'Escape Card': auto-cancels the next arrest
+  virusGraceUntil?: number; // brief grace after a shield absorbed a virus hit
   streakRefund?: number;    // ms of kill/arrest cooldown to refund (combo reward)
   lastScoreAt?: number;     // last kill / arrest time (combo timer)
   streak?: number;
@@ -275,6 +277,18 @@ export interface Door {
 
 export type PowerupKind = 'speed' | 'life' | 'builder' | 'emp' | 'radar' | 'adrenaline' | 'hack';
 
+/** Traitor 'Virus Radius': a toxic circle that kills crew who stand in it. */
+export interface VirusZone {
+  id: number;
+  x: number;
+  y: number;
+  radius: number;
+  startedAt: number;
+  expiresAt: number;
+  ownerId: number;
+  ownerTeam: TeamIndex;
+}
+
 /** Falling meteor: telegraphed on the ground, then stuns everyone caught in the blast and drops loot. */
 export interface Meteor {
   id: number;
@@ -321,6 +335,8 @@ export interface GameState {
   nextPlatformId: number;
   // Mars Mission extras (all optional so football is untouched)
   meteors?: Meteor[];
+  viruses?: VirusZone[];
+  nextVirusId?: number;
   nextMeteorAt?: number;
   nextMeteorId?: number;
   fxSeenTasks?: number[];   // task ids whose completion FX already played
@@ -423,6 +439,8 @@ export const SURGE_EVERY_TASKS = 4;
 export const SURGE_BOOST_MS = 5000;
 export const COMBO_WINDOW_MS = 8000;
 export const COMBO_REFUND_MS = 3000;
+export const VIRUS_RADIUS = 150;
+export const VIRUS_DURATION_MS = 10000;
 
 export const BUILDER_BLOCK_LIFETIME = 60000;
 export const BUILDER_BLOCK_LENGTH = 90;

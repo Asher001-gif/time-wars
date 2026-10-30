@@ -1,6 +1,6 @@
 import { getViewTarget } from './spectate';
 import { GameState, Player, PLAYER_RADIUS, TASK_RANGE, FreezeProjectile, JAIL_RECT, JAIL_DURATION, DOOR_INTERACT_RANGE, TEAM_COLORS, TEAM_NAMES, TeamIndex, Platform, BUILDER_BLOCK_LIFETIME } from './types';
-import { Powerup, POWERUP_RADIUS, Meteor, METEOR_RADIUS } from './types';
+import { Powerup, POWERUP_RADIUS, Meteor, METEOR_RADIUS, VirusZone } from './types';
 import { stepFx, drawWorldFx, drawScreenFx, shakeOffset } from './juice';
 import { ROOM_WALLS, OBSTACLES, ROOMS, SHELTERS, BILLBOARDS } from './collision';
 
@@ -79,7 +79,8 @@ export function renderGame(
   drawTaskStations(ctx, state);
   drawDoors(ctx, state);
   drawPlatforms(ctx, state.platforms);
-  drawPowerups(ctx, state.powerups);
+  drawViruses(ctx, state.viruses ?? [], nowT);
+  drawPowerups(ctx, state.powerups, human);
   drawMeteors(ctx, state.meteors ?? [], nowT);
 
 
@@ -724,9 +725,38 @@ function drawPlatforms(ctx: CanvasRenderingContext2D, platforms: Platform[]) {
 
 
 /* ==================== POWER-UPS ==================== */
-function drawPowerups(ctx: CanvasRenderingContext2D, powerups: Powerup[]) {
+function drawViruses(ctx: CanvasRenderingContext2D, viruses: VirusZone[], now: number) {
+  for (const v of viruses) {
+    const left = Math.max(0, v.expiresAt - now);
+    const life = left / (v.expiresAt - v.startedAt);
+    const pulse = 0.5 + 0.5 * Math.sin(now * 0.008);
+    const g = ctx.createRadialGradient(v.x, v.y, v.radius * 0.2, v.x, v.y, v.radius);
+    g.addColorStop(0, `rgba(125,255,58,${0.10 + 0.08 * pulse})`);
+    g.addColorStop(1, `rgba(40,160,20,${0.28 + 0.10 * pulse})`);
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(v.x, v.y, v.radius, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = `rgba(160,255,80,${0.55 + 0.35 * pulse})`;
+    ctx.lineWidth = 3; ctx.setLineDash([14, 10]); ctx.lineDashOffset = -now * 0.03;
+    ctx.beginPath(); ctx.arc(v.x, v.y, v.radius, 0, Math.PI * 2); ctx.stroke();
+    ctx.setLineDash([]);
+    // time-left arc
+    ctx.strokeStyle = 'rgba(255,255,255,0.7)'; ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.arc(v.x, v.y, v.radius + 8, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * life); ctx.stroke();
+    ctx.font = '28px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.globalAlpha = 0.55 + 0.4 * pulse; ctx.fillText('☣', v.x, v.y); ctx.globalAlpha = 1;
+    ctx.textBaseline = 'alphabetic';
+  }
+}
+
+function drawPowerups(ctx: CanvasRenderingContext2D, powerups: Powerup[], viewer?: Player) {
   const now = performance.now();
+  const viewerTraitor = !!viewer && (viewer.ability === 'kill' || viewer.ability === 'shooter');
   for (const pu of powerups) {
+    // Protectors can't take Hack / Shield pickups, so they don't see them at all.
+    if (viewer?.ability === 'jail' && (pu.kind === 'hack' || pu.kind === 'life')) continue;
+    // Traitors see a different pickup for the same item: Virus Radius / Escape Card.
+    const traitorHack = viewerTraitor && pu.kind === 'hack';
+    const traitorLife = viewerTraitor && pu.kind === 'life';
     const bob = Math.sin(now * 0.004 + pu.id * 1.7) * 3;
     const x = pu.x;
     const y = pu.y + bob;
@@ -740,7 +770,7 @@ function drawPowerups(ctx: CanvasRenderingContext2D, powerups: Powerup[]) {
       adrenaline: ['#ff7a3a', '#a33a10'],
       hack:       ['#c58bff', '#5a2aa0'],
     };
-    const [fill, stroke] = colors[pu.kind];
+    const [fill, stroke] = traitorHack ? ['#7dff3a', '#2a7a10'] : traitorLife ? ['#ffd84a', '#a37a00'] : colors[pu.kind];
     // Outer glow
     const glow = ctx.createRadialGradient(x, y, 4, x, y, POWERUP_RADIUS + 10);
     glow.addColorStop(0, fill + 'cc');
@@ -768,7 +798,11 @@ function drawPowerups(ctx: CanvasRenderingContext2D, powerups: Powerup[]) {
     ctx.lineWidth = 2.2;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
-    if (pu.kind === 'speed') {
+    if (traitorHack || traitorLife) {
+      ctx.font = '16px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(traitorHack ? '☣' : '🎫', 0, 1);
+      ctx.textBaseline = 'alphabetic';
+    } else if (pu.kind === 'speed') {
       // Lightning bolt
       ctx.beginPath();
       ctx.moveTo(2, -8);
@@ -1941,6 +1975,7 @@ function drawHUD(ctx: CanvasRenderingContext2D, state: GameState, w: number, h: 
   if (human.alive) {
     const chips: string[] = [];
     if ((human.shields ?? 0) > 0) chips.push(`🛡 ${human.shields}`);
+    if ((human.escapeCards ?? 0) > 0) chips.push(`🎫 ESCAPE x${human.escapeCards}`);
     if ((human.speedBoostUntil ?? 0) > performance.now()) {
       const secs = Math.ceil(((human.speedBoostUntil ?? 0) - performance.now()) / 1000);
       chips.push(`⚡ ${secs}s`);

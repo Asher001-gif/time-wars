@@ -14,6 +14,7 @@ import {
   EMP_RADIUS, EMP_STUN_MS, RADAR_DURATION, ADRENALINE_BOOST_MS,
   METEOR_RADIUS, METEOR_WARN_MS, METEOR_STUN_MS, METEOR_FIRST_AT, METEOR_GAP_MIN, METEOR_GAP_MAX,
   SURGE_EVERY_TASKS, SURGE_BOOST_MS, COMBO_WINDOW_MS, COMBO_REFUND_MS,
+  VIRUS_RADIUS, VIRUS_DURATION_MS,
 } from './types';
 import { burst, floater, ring, shake, flash, banner, sfx, resetFx } from './juice';
 
@@ -218,7 +219,7 @@ export function createGame(settings: GameSettings = DEFAULT_SETTINGS, playerName
     powerups: [],
     nextPowerupSpawnAt: 4000, // first spawn ~4s into the game
     nextPowerupId: 1,
-    meteors: [], nextMeteorAt: 0, nextMeteorId: 1, fxSeenTasks: [], surgeTasks: 0, lastStandDone: false,
+    meteors: [], viruses: [], nextVirusId: 1, nextMeteorAt: 0, nextMeteorId: 1, fxSeenTasks: [], surgeTasks: 0, lastStandDone: false,
     nextSyntheticDoorId: 1000,
     platforms: [],
     nextPlatformId: 1,
@@ -252,6 +253,7 @@ function nearestVisiblePowerup(player: Player, state: GameState) {
   let best: Powerup | null = null;
   let bestD = Infinity;
   for (const pu of state.powerups) {
+    if (!canPickupPowerup(player, pu.kind)) continue;
     const d = Math.hypot(pu.x - player.x, pu.y - player.y);
     if (d <= vision && d < bestD &&
         hasLineOfSight(player.x, player.y, pu.x, pu.y, state.doors)) {
@@ -264,6 +266,17 @@ function nearestVisiblePowerup(player: Player, state: GameState) {
 function updateAI(player: Player, allPlayers: Player[], state: GameState, now: number) {
   if (!player.alive || player.isHuman) return;
   if (player.jailed) { jailWander(player, now); return; }
+
+  // PRIORITY 0: crew bots run out of / away from a virus circle.
+  if (player.ability === 'crew' && state.viruses && state.viruses.length > 0) {
+    const v = state.viruses.find(z => z.ownerTeam !== player.team && dist(player, z) < z.radius + 70);
+    if (v) {
+      const dx = player.x - v.x, dy = player.y - v.y;
+      const d = Math.hypot(dx, dy) || 1;
+      player.direction = getNavigationDirection(player.x, player.y, player.x + (dx / d) * 220, player.y + (dy / d) * 220);
+      return;
+    }
+  }
 
   // PRIORITY 1: Power-up in vision -> grab it (highest priority).
   const pu = nearestVisiblePowerup(player, state);
@@ -519,6 +532,22 @@ function registerCombo(a: Player, label: 'KILL' | 'ARREST', now: number) {
 }
 
 function arrestPlayer(state: GameState, target: Player, now: number, arrester?: Player) {
+  // ESCAPE CARD: auto-cancels the arrest. Both the arrester and the target see it.
+  if ((target.escapeCards ?? 0) > 0) {
+    target.escapeCards = (target.escapeCards ?? 0) - 1;
+    const involvesHuman = target.isHuman || !!arrester?.isHuman;
+    if (involvesHuman || nearHuman(target.x, target.y, 900)) {
+      floater(target.x, target.y - 26, 'Escape Card!', '#ffd84a', 20);
+      if (arrester) floater(arrester.x, arrester.y - 26, 'Escape Card!', '#ffd84a', 20);
+      ring(target.x, target.y, 70, '#ffd84a', 560, 5); burst(target.x, target.y, '#ffd84a', 22, 4, 3);
+      sfx('shield');
+    }
+    if (involvesHuman) {
+      banner('🎫 Escape Card!', '#ffd84a', target.isHuman ? 'You broke free from jail' : `${target.name} broke free from jail`);
+      shake(8); flash('#ffd84a', 240);
+    }
+    return;
+  }
   if (nearHuman(target.x, target.y)) {
     burst(target.x, target.y, '#ffb13c', 18, 3.4); ring(target.x, target.y, 60, '#ffb13c');
     floater(target.x, target.y, '⛓ BUSTED!', '#ffb13c', 17);
@@ -630,6 +659,21 @@ function updateMeteors(state: GameState, now: number) {
   state.meteors = state.meteors.filter(m => !m.landedAt || now - m.landedAt < 5000);
 }
 
+function updateViruses(state: GameState, now: number) {
+  if (!state.viruses || state.viruses.length === 0) return;
+  state.viruses = state.viruses.filter(v => v.expiresAt > now);
+  for (const v of state.viruses) {
+    const owner = state.players.find(q => q.id === v.ownerId);
+    for (const p of state.players) {
+      if (!p.alive || p.jailed || p.ability !== 'crew' || p.team === v.ownerTeam) continue;
+      if (Math.hypot(p.x - v.x, p.y - v.y) > v.radius + PLAYER_RADIUS * 0.4) continue;
+      if ((p.virusGraceUntil ?? 0) > now) continue;
+      const absorbed = applyAttack(p, owner);
+      if (absorbed) p.virusGraceUntil = now + 1200;
+    }
+  }
+}
+
 function updateTaskFx(state: GameState, now: number) {
   const seen = state.fxSeenTasks ?? (state.fxSeenTasks = []);
   for (const st of state.taskStations) {
@@ -672,6 +716,13 @@ function updateLastStand(state: GameState, now: number) {
 }
 
 /* ===================== POWER-UPS ===================== */
+const isTraitor = (p: Player) => p.ability === 'kill' || p.ability === 'shooter';
+/** Protectors can't use the Hack / Shield pickups (useless for them), so they can't take them. */
+export function canPickupPowerup(p: Player, kind: PowerupKind): boolean {
+  if (p.ability === 'jail' && (kind === 'hack' || kind === 'life')) return false;
+  return true;
+}
+
 const POWERUP_KINDS: PowerupKind[] = [
   'speed', 'speed', 'speed', 'life', 'life', 'builder', // builder is rare
   'emp', 'emp', 'radar', 'radar', 'adrenaline', 'adrenaline', 'hack',
@@ -729,7 +780,13 @@ function applyPowerup(state: GameState, p: Player, kind: PowerupKind, now: numbe
   if (kind === 'speed') {
     p.speedBoostUntil = Math.max(p.speedBoostUntil ?? 0, now + SPEED_BOOST_DURATION);
   } else if (kind === 'life') {
-    p.shields = (p.shields ?? 0) + 1;
+    if (isTraitor(p)) {
+      p.escapeCards = (p.escapeCards ?? 0) + 1;
+      label = '🎫 ESCAPE CARD';
+      if (p.isHuman) banner('🎫 ESCAPE CARD', '#ffd84a', 'Next arrest is cancelled automatically');
+    } else {
+      p.shields = (p.shields ?? 0) + 1;
+    }
   } else if (kind === 'builder') {
     p.builderCharges = (p.builderCharges ?? 0) + 1;
   } else if (kind === 'emp') {
@@ -758,8 +815,18 @@ function applyPowerup(state: GameState, p: Player, kind: PowerupKind, now: numbe
         if (nearHuman(t.x, t.y, 900)) { ring(t.x, t.y, 90, '#c58bff', 600, 5); burst(t.x, t.y, '#c58bff', 20, 4); sfx('hack'); }
         label = '💻 HACKED A TASK!';
       }
-    } else {
-      p.shields = (p.shields ?? 0) + 1; label = '💻 HACK → SHIELD';
+    } else if (isTraitor(p)) {
+      if (!state.viruses) state.viruses = [];
+      state.viruses.push({
+        id: state.nextVirusId ?? 1, x: p.x, y: p.y, radius: VIRUS_RADIUS,
+        startedAt: now, expiresAt: now + VIRUS_DURATION_MS, ownerId: p.id, ownerTeam: p.team,
+      });
+      state.nextVirusId = (state.nextVirusId ?? 1) + 1;
+      label = '☣ VIRUS RADIUS';
+      if (nearHuman(p.x, p.y, 900)) {
+        ring(p.x, p.y, VIRUS_RADIUS, '#7dff3a', 700, 6); burst(p.x, p.y, '#7dff3a', 30, 4.5, 3); sfx('hack'); shake(6);
+      }
+      if (p.isHuman) banner('☣ VIRUS RADIUS', '#7dff3a', 'Crew inside the circle die — 10s');
     }
   }
   if (nearHuman(p.x, p.y)) {
@@ -776,7 +843,7 @@ function processPowerupPickups(state: GameState, now: number) {
   for (const pu of state.powerups) {
     let pickedBy: Player | null = null;
     for (const p of state.players) {
-      if (!p.alive || p.jailed) continue;
+      if (!p.alive || p.jailed || !canPickupPowerup(p, pu.kind)) continue;
       if (Math.hypot(p.x - pu.x, p.y - pu.y) < POWERUP_PICKUP_RANGE + PLAYER_RADIUS - 6) {
         pickedBy = p;
         break;
@@ -1287,6 +1354,7 @@ export function updateGame(state: GameState, dt: number, keys: Set<string>, now:
   }
   processPowerupPickups(state, now);
   updateMeteors(state, now);
+  updateViruses(state, now);
   updateTaskFx(state, now);
   updateLastStand(state, now);
   cleanupSyntheticDoors(state, now);
