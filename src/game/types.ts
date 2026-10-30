@@ -194,6 +194,7 @@ export interface Player {
   builderCharges?: number;
   stunnedUntil?: number;    // EMP / meteor stun: can't move or attack
   radarUntil?: number;      // radar power-up: shows every player on screen
+  doorCloseCdUntil?: number; // bots: cooldown before they may close another door
   escapeCards?: number;     // traitor 'Escape Card': auto-cancels the next arrest
   virusGraceUntil?: number; // brief grace after a shield absorbed a virus hit
   streakRefund?: number;    // ms of kill/arrest cooldown to refund (combo reward)

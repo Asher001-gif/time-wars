@@ -20,7 +20,7 @@ import { burst, floater, ring, shake, flash, banner, sfx, resetFx } from './juic
 
 import { createTaskStations } from './tasks';
 import { resolveCollisions, hasLineOfSight, createDoors } from './collision';
-import { getNavigationDirection, getRoomAt } from './navigation';
+import { getNavigationDirection, getRoomAt, navSetDoors, navSetAgent, pathDistance, navWarmup } from './navigation';
 
 const BOT_NAMES = [
   'StarBoy', 'error504', 'top_dawg', 'LunarLord', 'FireBender',
@@ -101,6 +101,7 @@ function jailDurationFromSetting(opt: GameSettings['jailTimer']): number {
 }
 
 export function createGame(settings: GameSettings = DEFAULT_SETTINGS, playerName?: string): GameState {
+  navWarmup();
   resetFx();
   // Build (team, ability) list from settings
   type Slot = { team: TeamIndex; ability: Ability };
@@ -249,16 +250,21 @@ function jailWander(player: Player, now: number) {
 }
 
 function nearestVisiblePowerup(player: Player, state: GameState) {
+  // Bots notice pickups in sight, and also ones a short WALK away
+  // (path distance, so a pickup behind a wall only counts if the route is short).
   const vision = BOT_VISION[player.ability];
+  const reach = Math.max(vision * 1.8, 420);
   let best: Powerup | null = null;
   let bestD = Infinity;
   for (const pu of state.powerups) {
     if (!canPickupPowerup(player, pu.kind)) continue;
-    const d = Math.hypot(pu.x - player.x, pu.y - player.y);
-    if (d <= vision && d < bestD &&
-        hasLineOfSight(player.x, player.y, pu.x, pu.y, state.doors)) {
-      bestD = d; best = pu;
-    }
+    const straight = Math.hypot(pu.x - player.x, pu.y - player.y);
+    if (straight > reach) continue;
+    // never run into an enemy virus circle for a pickup
+    if (player.ability === 'crew' && state.viruses?.some(v => v.ownerTeam !== player.team && Math.hypot(pu.x - v.x, pu.y - v.y) < v.radius + 30)) continue;
+    const seen = straight <= vision && hasLineOfSight(player.x, player.y, pu.x, pu.y, state.doors);
+    const d = seen ? straight : pathDistance(player.x, player.y, pu.x, pu.y);
+    if (d <= reach && d < bestD) { bestD = d; best = pu; }
   }
   return best;
 }
@@ -266,6 +272,8 @@ function nearestVisiblePowerup(player: Player, state: GameState) {
 function updateAI(player: Player, allPlayers: Player[], state: GameState, now: number) {
   if (!player.alive || player.isHuman) return;
   if (player.jailed) { jailWander(player, now); return; }
+  navSetDoors(state.doors);
+  navSetAgent(player.ability !== 'jail'); // protectors can't open doors, so closed doors are walls to them
 
   // PRIORITY 0: crew bots run out of / away from a virus circle.
   if (player.ability === 'crew' && state.viruses && state.viruses.length > 0) {
@@ -1253,49 +1261,62 @@ export function updateGame(state: GameState, dt: number, keys: Set<string>, now:
       }
     }
 
-    if (!p.isHuman && p.doorBusyUntil === 0) {
-      // Check if there's a closed door right in front to interact with
-      if (p.ability !== 'jail') {
-        if (p.enhanced && p.ability === 'crew') {
-          // Enhanced crew: don't toggle doors casually. Only close a nearby
-          // OPEN door if an enemy threat is close by.
-          const threatNear = state.players.some(other =>
-            other.id !== p.id && other.alive && !other.jailed &&
-            other.team !== p.team &&
-            (other.ability === 'kill' || other.ability === 'shooter' || other.ability === 'jail') &&
-            Math.hypot(other.x - p.x, other.y - p.y) < 260
-          );
-          if (threatNear) {
-            const openDoor = state.doors.find(d =>
-              d.open && !d.synthetic && Math.hypot(d.cx - p.x, d.cy - p.y) < 80
-            );
-            if (openDoor) {
-              p.doorBusyUntil = now + 3000;
-              p.doorBusyId = openDoor.id;
-              p.direction = { x: 0, y: 0 };
-            }
-          }
-        } else {
-          const door = state.doors.find(d =>
-            !d.open && !d.synthetic && Math.hypot(d.cx - p.x, d.cy - p.y) < 50
-          );
-          if (door) {
-            // Door coordination: skip if another bot is already opening this door.
-            const alreadyBusy = state.players.some(other =>
-              other.id !== p.id && other.doorBusyId === door.id && other.doorBusyUntil > 0
-            );
-            if (!alreadyBusy) {
-              p.doorBusyUntil = now + 3000;
-              p.doorBusyId = door.id;
-              p.direction = { x: 0, y: 0 };
-            }
-          }
+    // Smart door use (crew + traitors only; protectors can't use doors).
+    if (!p.isHuman && p.doorBusyUntil === 0 && !p.jailed && p.ability !== 'jail' && !isStunned(p, now)) {
+      const startDoorJob = (doorId: number) => {
+        p.doorBusyUntil = now + DOOR_USE_COOLDOWN; p.doorBusyId = doorId; p.direction = { x: 0, y: 0 };
+      };
+      const busyElsewhere = (doorId: number) => state.players.some(o =>
+        o.id !== p.id && o.doorBusyId === doorId && o.doorBusyUntil > 0);
+      let didJob = false;
+      // 1) OPEN: only a closed door that is actually in the way of where we're heading.
+      const dl = Math.hypot(p.direction.x, p.direction.y);
+      if (dl > 0.1) {
+        const door = state.doors.find(d => {
+          if (d.open || d.synthetic) return false;
+          const dx = d.cx - p.x, dy = d.cy - p.y, dd = Math.hypot(dx, dy);
+          return dd < 60 && (dx * p.direction.x + dy * p.direction.y) / ((dd || 1) * dl) > 0.3;
+        });
+        if (door && !busyElsewhere(door.id)) { startDoorJob(door.id); didJob = true; }
+      }
+      // 2) CLOSE: shut a nearby open door to cut off a pursuer (protectors can never open doors,
+      //    so traitors use this against them; crew use it against any enemy).
+      if (!didJob && now >= (p.doorCloseCdUntil ?? 0)) {
+        const threat = state.players.find(o => {
+          if (o.id === p.id || !o.alive || o.jailed || o.team === p.team) return false;
+          const hostile = p.ability === 'crew'
+            ? (o.ability === 'kill' || o.ability === 'shooter' || o.ability === 'jail')
+            : o.ability === 'jail';
+          const d = Math.hypot(o.x - p.x, o.y - p.y);
+          return hostile && d > 140 && d < 300;
+        });
+        if (threat) {
+          const door = state.doors.find(d => {
+            if (!d.open || d.synthetic || busyElsewhere(d.id)) return false;
+            const dm = Math.hypot(d.cx - p.x, d.cy - p.y);
+            return dm < 80 && Math.hypot(d.cx - threat.x, d.cy - threat.y) > dm;
+          });
+          if (door) { startDoorJob(door.id); p.doorCloseCdUntil = now + 8000; didJob = true; }
         }
       }
     }
 
     if (!p.isHuman && p.doorBusyUntil === 0) {
       updateAI(p, state.players, state, now);
+      // Unstick: if a bot wants to move but hasn't gone anywhere for ~0.7s, sidestep briefly.
+      if (p.alive && !p.jailed && !p.doingTask && !isStunned(p, now)) {
+        if ((p.escapeUntil ?? 0) > now) {
+          p.direction = { x: p.escapeTX ?? 0, y: p.escapeTY ?? 0 };
+        } else if (now - (p.stuckSampleAt ?? 0) > 700) {
+          const moved = Math.hypot(p.x - (p.stuckSampleX ?? p.x), p.y - (p.stuckSampleY ?? p.y));
+          const wants = Math.abs(p.direction.x) + Math.abs(p.direction.y) > 0.1;
+          if (p.stuckSampleAt && wants && moved < 8) {
+            const a = Math.atan2(p.direction.y, p.direction.x) + (Math.random() < 0.5 ? 1 : -1) * (Math.PI / 2 + (Math.random() - 0.5) * 0.8);
+            p.escapeTX = Math.cos(a); p.escapeTY = Math.sin(a); p.escapeUntil = now + 450;
+          }
+          p.stuckSampleAt = now; p.stuckSampleX = p.x; p.stuckSampleY = p.y;
+        }
+      }
     }
 
     if (isStunned(p, now)) p.direction = { x: 0, y: 0 };

@@ -248,3 +248,18 @@ export function hasLineOfSight(
   }
   return true;
 }
+
+
+/** Smallest distance from a point to any wall segment / rock edge, measured to the *player's* collision rule (static map only). */
+export function pointClearance(px: number, py: number): number {
+  let best = Infinity;
+  for (const w of ROOM_WALLS) {
+    const { dist } = pointToSegDist(px, py, w.x1, w.y1, w.x2, w.y2);
+    if (dist < best) best = dist;
+  }
+  for (const o of OBSTACLES) {
+    const d = Math.hypot(px - o.x, py - o.y) - o.r;
+    if (d < best) best = d;
+  }
+  return best;
+}
