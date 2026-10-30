@@ -192,6 +192,11 @@ export interface Player {
   shields?: number;
   speedBoostUntil?: number;
   builderCharges?: number;
+  stunnedUntil?: number;    // EMP / meteor stun: can't move or attack
+  radarUntil?: number;      // radar power-up: shows every player on screen
+  streakRefund?: number;    // ms of kill/arrest cooldown to refund (combo reward)
+  lastScoreAt?: number;     // last kill / arrest time (combo timer)
+  streak?: number;
   facingX?: number;
   facingY?: number;
   // Builder-block platform state
@@ -268,7 +273,17 @@ export interface Door {
   expiresAt?: number;
 }
 
-export type PowerupKind = 'speed' | 'life' | 'builder';
+export type PowerupKind = 'speed' | 'life' | 'builder' | 'emp' | 'radar' | 'adrenaline' | 'hack';
+
+/** Falling meteor: telegraphed on the ground, then stuns everyone caught in the blast and drops loot. */
+export interface Meteor {
+  id: number;
+  x: number;
+  y: number;
+  warnAt: number;     // when the warning ring appeared
+  hitAt: number;      // impact time
+  landedAt?: number;  // set after impact (crater stays for a few seconds)
+}
 
 export interface Powerup {
   id: number;
@@ -304,6 +319,13 @@ export interface GameState {
   nextSyntheticDoorId: number;
   platforms: Platform[];
   nextPlatformId: number;
+  // Mars Mission extras (all optional so football is untouched)
+  meteors?: Meteor[];
+  nextMeteorAt?: number;
+  nextMeteorId?: number;
+  fxSeenTasks?: number[];   // task ids whose completion FX already played
+  surgeTasks?: number;      // tasks-completed count at the last TASK SURGE
+  lastStandDone?: boolean;
   // Football mode
   mode?: MapMode;
   ball?: Ball;
@@ -386,6 +408,22 @@ export const POWERUP_SPAWN_INTERVAL_MAX = 22000;
 export const POWERUP_MAX_ON_MAP = 4;
 export const SPEED_BOOST_DURATION = 5000;
 export const SPEED_BOOST_MULT = 1.6;
+// Mars Mission extras
+export const EMP_RADIUS = 240;
+export const EMP_STUN_MS = 3000;
+export const RADAR_DURATION = 8000;
+export const ADRENALINE_BOOST_MS = 4000;
+export const METEOR_RADIUS = 90;
+export const METEOR_WARN_MS = 2000;
+export const METEOR_STUN_MS = 2200;
+export const METEOR_FIRST_AT = 25000;
+export const METEOR_GAP_MIN = 35000;
+export const METEOR_GAP_MAX = 55000;
+export const SURGE_EVERY_TASKS = 4;
+export const SURGE_BOOST_MS = 5000;
+export const COMBO_WINDOW_MS = 8000;
+export const COMBO_REFUND_MS = 3000;
+
 export const BUILDER_BLOCK_LIFETIME = 60000;
 export const BUILDER_BLOCK_LENGTH = 90;
 export const BUILDER_BLOCK_SIZE = 64;            // platform footprint (square)

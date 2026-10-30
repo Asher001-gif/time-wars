@@ -11,7 +11,11 @@ import {
   POWERUP_SPAWN_INTERVAL_MIN, POWERUP_SPAWN_INTERVAL_MAX,
   POWERUP_MAX_ON_MAP, SPEED_BOOST_DURATION, SPEED_BOOST_MULT,
   BUILDER_BLOCK_LIFETIME, BUILDER_BLOCK_SIZE, BUILDER_PREV_POS_DELAY_MS,
+  EMP_RADIUS, EMP_STUN_MS, RADAR_DURATION, ADRENALINE_BOOST_MS,
+  METEOR_RADIUS, METEOR_WARN_MS, METEOR_STUN_MS, METEOR_FIRST_AT, METEOR_GAP_MIN, METEOR_GAP_MAX,
+  SURGE_EVERY_TASKS, SURGE_BOOST_MS, COMBO_WINDOW_MS, COMBO_REFUND_MS,
 } from './types';
+import { burst, floater, ring, shake, flash, banner, sfx, resetFx } from './juice';
 
 import { createTaskStations } from './tasks';
 import { resolveCollisions, hasLineOfSight, createDoors } from './collision';
@@ -96,6 +100,7 @@ function jailDurationFromSetting(opt: GameSettings['jailTimer']): number {
 }
 
 export function createGame(settings: GameSettings = DEFAULT_SETTINGS, playerName?: string): GameState {
+  resetFx();
   // Build (team, ability) list from settings
   type Slot = { team: TeamIndex; ability: Ability };
   const slots: Slot[] = [];
@@ -213,6 +218,7 @@ export function createGame(settings: GameSettings = DEFAULT_SETTINGS, playerName
     powerups: [],
     nextPowerupSpawnAt: 4000, // first spawn ~4s into the game
     nextPowerupId: 1,
+    meteors: [], nextMeteorAt: 0, nextMeteorId: 1, fxSeenTasks: [], surgeTasks: 0, lastStandDone: false,
     nextSyntheticDoorId: 1000,
     platforms: [],
     nextPlatformId: 1,
@@ -480,7 +486,45 @@ function wanderAI(player: Player, now: number) {
 }
 
 let _arrestEventId = 0;
-function arrestPlayer(state: GameState, target: Player, now: number) {
+let _humanRef: Player | null = null;
+function nearHuman(x: number, y: number, r = 700) {
+  return !!_humanRef && Math.hypot(_humanRef.x - x, _humanRef.y - y) < r;
+}
+const isStunned = (p: Player, now: number) => (p.stunnedUntil ?? 0) > now;
+
+/** Stun a player (EMP / meteor). A shield makes you immune (and isn't used up). */
+function stunPlayer(p: Player, now: number, ms: number): boolean {
+  if (!p.alive || p.jailed || (p.shields ?? 0) > 0) return false;
+  p.stunnedUntil = Math.max(p.stunnedUntil ?? 0, now + ms);
+  p.direction = { x: 0, y: 0 };
+  floater(p.x, p.y - 10, '💫 STUNNED', '#9fe8ff', 14);
+  return true;
+}
+
+/** Combo: back-to-back kills / arrests refund part of the cooldown and get announced. */
+function registerCombo(a: Player, label: 'KILL' | 'ARREST', now: number) {
+  const within = now - (a.lastScoreAt ?? -1e9) < COMBO_WINDOW_MS;
+  a.streak = within ? (a.streak ?? 0) + 1 : 1;
+  a.lastScoreAt = now;
+  if (a.streak < 2) return;
+  a.streakRefund = (a.streakRefund ?? 0) + COMBO_REFUND_MS;
+  const names = ['', '', 'DOUBLE', 'TRIPLE', 'QUAD'];
+  const name = a.streak >= 5 ? 'RAMPAGE' : `${names[a.streak]} ${label}`;
+  if (a.isHuman) {
+    banner(name + '!', label === 'KILL' ? '#ff5a3c' : '#ffb13c', 'cooldown refunded');
+    sfx('streak'); shake(10); flash(label === 'KILL' ? '#ff3b2f' : '#ffb13c', 220);
+  } else if (nearHuman(a.x, a.y)) {
+    floater(a.x, a.y - 14, `${name} x${a.streak}`, '#ff9a3c', 15);
+  }
+}
+
+function arrestPlayer(state: GameState, target: Player, now: number, arrester?: Player) {
+  if (nearHuman(target.x, target.y)) {
+    burst(target.x, target.y, '#ffb13c', 18, 3.4); ring(target.x, target.y, 60, '#ffb13c');
+    floater(target.x, target.y, '⛓ BUSTED!', '#ffb13c', 17);
+    if (target.isHuman) { shake(10); flash('#ffb13c'); }
+  }
+  if (arrester) registerCombo(arrester, 'ARREST', now);
   target.jailed = true;
   target.jailedUntil = now + state.jailDuration;
   target.doingTask = false;
@@ -506,21 +550,144 @@ function isKillImmune(attacker: Player, target: Player): boolean {
 }
 
 /** Attack interception via shields. Returns true if attack was absorbed. */
-function applyAttack(target: Player): boolean {
+function applyAttack(target: Player, attacker?: Player): boolean {
+  const now = performance.now();
   if ((target.shields ?? 0) > 0) {
     target.shields = (target.shields ?? 0) - 1;
+    if (nearHuman(target.x, target.y)) {
+      ring(target.x, target.y, 55, '#7fe7ff', 450, 5); burst(target.x, target.y, '#7fe7ff', 16, 3.6);
+      floater(target.x, target.y, '🛡 BLOCKED!', '#7fe7ff', 17); sfx('shield');
+      if (target.isHuman) { shake(8); flash('#7fe7ff'); }
+    }
     return true;
   }
   target.alive = false;
   target.doingTask = false;
   target.taskStationId = null;
+  if (nearHuman(target.x, target.y)) {
+    burst(target.x, target.y, '#ff3b3b', 26, 4.2, 3.5); burst(target.x, target.y, '#ffb3a0', 10, 2.2, 2.5);
+    ring(target.x, target.y, 80, '#ff3b3b'); floater(target.x, target.y, '💀 ELIMINATED', '#ff6a5a', 16);
+    shake(target.isHuman ? 16 : 7); sfx('kill');
+    if (target.isHuman) flash('#ff0000', 340);
+  }
+  if (attacker) registerCombo(attacker, 'KILL', now);
   return false;
+}
+
+/* ===================== METEORS / SURGES / LAST STAND ===================== */
+function isFreePoint(x: number, y: number, doors: Door[]) {
+  if (x < 80 || y < 80 || x > MAP_WIDTH - 80 || y > MAP_HEIGHT - 80) return false;
+  if (isPointInsideJail(x, y, 40)) return false;
+  const r = resolveCollisions(x, y, doors);
+  return Math.hypot(r.x - x, r.y - y) <= 0.5;
+}
+
+function updateMeteors(state: GameState, now: number) {
+  if (!state.meteors) state.meteors = [];
+  if (!state.nextMeteorAt) state.nextMeteorAt = now + METEOR_FIRST_AT;
+  if (now >= state.nextMeteorAt) {
+    const count = 3 + Math.floor(Math.random() * 2);
+    const me = state.players[0].alive ? state.players[0] : null;
+    for (let i = 0; i < count; i++) {
+      let pt: { x: number; y: number } | null = null;
+      if (i === 0 && me) {          // one always lands near you so you get to dodge it
+        for (let k = 0; k < 14 && !pt; k++) {
+          const a = Math.random() * Math.PI * 2, d = 90 + Math.random() * 150;
+          const x = me.x + Math.cos(a) * d, y = me.y + Math.sin(a) * d;
+          if (isFreePoint(x, y, state.doors)) pt = { x, y };
+        }
+      }
+      pt = pt ?? findFreeSpawnPoint(state.doors);
+      if (!pt) continue;
+      const warnAt = now + i * 350;
+      state.meteors.push({ id: state.nextMeteorId ?? 1, x: pt.x, y: pt.y, warnAt, hitAt: warnAt + METEOR_WARN_MS });
+      state.nextMeteorId = (state.nextMeteorId ?? 1) + 1;
+    }
+    banner('☄ METEOR SHOWER', '#ff8a3c', 'Dodge the red rings — loot drops at the craters');
+    sfx('warn');
+    state.nextMeteorAt = now + METEOR_GAP_MIN + Math.random() * (METEOR_GAP_MAX - METEOR_GAP_MIN);
+  }
+  for (const m of state.meteors) {
+    if (m.landedAt || now < m.hitAt) continue;
+    m.landedAt = now;
+    if (nearHuman(m.x, m.y, 900)) {
+      ring(m.x, m.y, METEOR_RADIUS * 1.5, '#ff8a3c', 700, 7); ring(m.x, m.y, METEOR_RADIUS, '#fff2b0', 420, 4);
+      burst(m.x, m.y, '#ff8a3c', 36, 5.5, 4); burst(m.x, m.y, '#ffe9a8', 16, 3, 3);
+      sfx('boom'); shake(nearHuman(m.x, m.y, 260) ? 16 : 8);
+    }
+    for (const p of state.players) {
+      if (Math.hypot(p.x - m.x, p.y - m.y) < METEOR_RADIUS + PLAYER_RADIUS * 0.5) {
+        if (!stunPlayer(p, now, METEOR_STUN_MS) && p.isHuman && (p.shields ?? 0) > 0) floater(p.x, p.y, '🛡 SHIELD HELD', '#7fe7ff', 15);
+      }
+    }
+    if (state.powerups.length < POWERUP_MAX_ON_MAP + 3 && isFreePoint(m.x, m.y, state.doors)) {
+      state.powerups.push({
+        id: state.nextPowerupId++, kind: METEOR_LOOT[Math.floor(Math.random() * METEOR_LOOT.length)],
+        x: m.x, y: m.y, spawnedAt: now,
+      });
+    }
+  }
+  state.meteors = state.meteors.filter(m => !m.landedAt || now - m.landedAt < 5000);
+}
+
+function updateTaskFx(state: GameState, now: number) {
+  const seen = state.fxSeenTasks ?? (state.fxSeenTasks = []);
+  for (const st of state.taskStations) {
+    if (!st.completed || seen.includes(st.id)) continue;
+    seen.push(st.id);
+    if (nearHuman(st.x, st.y, 900)) {
+      burst(st.x, st.y, '#ffd84a', 24, 4.2, 3.5); ring(st.x, st.y, 70, '#ffd84a', 560);
+      floater(st.x, st.y, '✔ TASK DONE', '#8dff9a', 15); sfx('task');
+    }
+  }
+  // TASK SURGE: every few finished tasks the whole crew gets a speed burst
+  const prev = state.surgeTasks ?? 0;
+  if (Math.floor(state.tasksCompleted / SURGE_EVERY_TASKS) > Math.floor(prev / SURGE_EVERY_TASKS)) {
+    for (const p of state.players) {
+      if (p.ability !== 'crew' || !p.alive || p.jailed) continue;
+      p.speedBoostUntil = Math.max(p.speedBoostUntil ?? 0, now + SURGE_BOOST_MS);
+      if (nearHuman(p.x, p.y)) burst(p.x, p.y, '#6dff9a', 14, 3);
+    }
+    banner('⚡ TASK SURGE', '#6dff9a', `${state.tasksCompleted} tasks done — crew speed burst!`);
+    sfx('surge');
+    if (state.players[0].ability === 'crew') flash('#6dff9a', 260);
+  }
+  state.surgeTasks = state.tasksCompleted;
+}
+
+/** Comeback: when only 3 crew are left standing they each get a shield + speed burst (once). */
+function updateLastStand(state: GameState, now: number) {
+  if (state.lastStandDone) return;
+  const crew = state.players.filter(p => p.ability === 'crew');
+  const alive = crew.filter(p => p.alive);
+  if (crew.length < 5 || alive.length === 0 || alive.length > 3) return;
+  state.lastStandDone = true;
+  for (const p of alive) {
+    p.shields = (p.shields ?? 0) + 1;
+    p.speedBoostUntil = Math.max(p.speedBoostUntil ?? 0, now + 6000);
+    burst(p.x, p.y, '#ff5a5a', 22, 4.5); ring(p.x, p.y, 90, '#ff5a5a', 700, 6);
+  }
+  banner('⚔ LAST STAND', '#ff5a5a', 'Surviving crew gain a shield + speed');
+  sfx('laststand'); shake(14); flash('#ff3b3b', 300);
 }
 
 /* ===================== POWER-UPS ===================== */
 const POWERUP_KINDS: PowerupKind[] = [
   'speed', 'speed', 'speed', 'life', 'life', 'builder', // builder is rare
+  'emp', 'emp', 'radar', 'radar', 'adrenaline', 'adrenaline', 'hack',
 ];
+// Meteor crash-site loot: only the spicy stuff
+const METEOR_LOOT: PowerupKind[] = ['emp', 'adrenaline', 'radar', 'hack', 'life', 'speed'];
+
+const PU_STYLE: Record<PowerupKind, { color: string; label: string }> = {
+  speed: { color: '#ffe46a', label: '⚡ SPEED' },
+  life: { color: '#ff7a8a', label: '🛡 SHIELD' },
+  builder: { color: '#9ac9ff', label: '🛠 BUILDER' },
+  emp: { color: '#7fe7ff', label: '💥 EMP BLAST' },
+  radar: { color: '#6dff9a', label: '📡 RADAR' },
+  adrenaline: { color: '#ff7a3a', label: '🔥 ADRENALINE' },
+  hack: { color: '#c58bff', label: '💻 HACK' },
+};
 
 function pickRandomPowerupKind(): PowerupKind {
   return POWERUP_KINDS[Math.floor(Math.random() * POWERUP_KINDS.length)];
@@ -556,14 +723,51 @@ function spawnPowerup(state: GameState, now: number) {
   });
 }
 
-function applyPowerup(p: Player, kind: PowerupKind, now: number) {
+function applyPowerup(state: GameState, p: Player, kind: PowerupKind, now: number) {
+  const st = PU_STYLE[kind];
+  let label = st.label;
   if (kind === 'speed') {
     p.speedBoostUntil = Math.max(p.speedBoostUntil ?? 0, now + SPEED_BOOST_DURATION);
   } else if (kind === 'life') {
     p.shields = (p.shields ?? 0) + 1;
   } else if (kind === 'builder') {
     p.builderCharges = (p.builderCharges ?? 0) + 1;
+  } else if (kind === 'emp') {
+    let n = 0;
+    for (const q of state.players) {
+      if (q.id === p.id || q.team === p.team || !q.alive || q.jailed) continue;
+      if (Math.hypot(q.x - p.x, q.y - p.y) < EMP_RADIUS && stunPlayer(q, now, EMP_STUN_MS)) n++;
+    }
+    if (nearHuman(p.x, p.y)) {
+      ring(p.x, p.y, EMP_RADIUS, '#7fe7ff', 650, 6); ring(p.x, p.y, EMP_RADIUS * 0.6, '#ffffff', 450, 3);
+      burst(p.x, p.y, '#7fe7ff', 30, 5, 3); sfx('emp'); shake(9);
+    }
+    label = n > 0 ? `💥 EMP! ${n} stunned` : st.label;
+  } else if (kind === 'radar') {
+    p.radarUntil = Math.max(p.radarUntil ?? 0, now + RADAR_DURATION);
+  } else if (kind === 'adrenaline') {
+    p.killCooldown = 0; p.arrestCooldown = 0;
+    p.speedBoostUntil = Math.max(p.speedBoostUntil ?? 0, now + ADRENALINE_BOOST_MS);
+    label = p.ability === 'crew' ? '🔥 ADRENALINE — RUN!' : '🔥 COOLDOWN RESET';
+  } else if (kind === 'hack') {
+    if (p.ability === 'crew') {
+      const open = state.taskStations.filter(t => t.team === p.team && !t.completed);
+      if (open.length > 0) {
+        const t = open[Math.floor(Math.random() * open.length)];
+        t.completed = true; state.tasksCompleted++;
+        if (nearHuman(t.x, t.y, 900)) { ring(t.x, t.y, 90, '#c58bff', 600, 5); burst(t.x, t.y, '#c58bff', 20, 4); sfx('hack'); }
+        label = '💻 HACKED A TASK!';
+      }
+    } else {
+      p.shields = (p.shields ?? 0) + 1; label = '💻 HACK → SHIELD';
+    }
   }
+  if (nearHuman(p.x, p.y)) {
+    burst(p.x, p.y, st.color, 20, 3.6); ring(p.x, p.y, 48, st.color, 480, 4);
+    floater(p.x, p.y - 8, label, st.color, p.isHuman ? 17 : 14);
+    if (kind !== 'emp' && kind !== 'hack') sfx('pickup');
+  }
+  if (p.isHuman && (kind === 'emp' || kind === 'adrenaline')) flash(st.color, 200);
 }
 
 function processPowerupPickups(state: GameState, now: number) {
@@ -578,7 +782,7 @@ function processPowerupPickups(state: GameState, now: number) {
         break;
       }
     }
-    if (pickedBy) applyPowerup(pickedBy, pu.kind, now);
+    if (pickedBy) applyPowerup(state, pickedBy, pu.kind, now);
     else remaining.push(pu);
   }
   state.powerups = remaining;
@@ -795,7 +999,7 @@ function updateBullets(state: GameState, now: number) {
       if (p.ability === 'jail') continue; // protectors can't be shot
       const d = Math.hypot(p.x - cx, p.y - cy);
       if (d < BULLET_HIT_RADIUS + PLAYER_RADIUS - 8) {
-        applyAttack(p);
+        applyAttack(p, state.players.find(q => q.id === proj.ownerId));
         proj.hit = true;
         break;
       }
@@ -845,7 +1049,7 @@ function performAIActions(player: Player, allPlayers: Player[], state: GameState
           if (player.ability === 'shooter') {
             fireBullet(state, player, target, now);
           } else {
-            applyAttack(target);
+            applyAttack(target, player);
           }
           player.killCooldown = KILL_COOLDOWN;
           player.actionPlanTargetId = null;
@@ -883,7 +1087,7 @@ function performAIActions(player: Player, allPlayers: Player[], state: GameState
         player.actionPlanAt = now + 1000 + Math.random() * 1000;
       } else if (now >= player.actionPlanAt) {
         if (Math.random() < chance) {
-          arrestPlayer(state, target, now);
+          arrestPlayer(state, target, now, player);
           player.arrestCooldown = ARREST_COOLDOWN;
         } else {
           player.actionSkipUntil = now + 2000 + Math.random() * 1500;
@@ -917,6 +1121,7 @@ export function updateGame(state: GameState, dt: number, keys: Set<string>, now:
   if (state.phase !== 'playing') return state;
 
   const human = state.players[0];
+  _humanRef = human;
 
   if (human.alive && !human.doingTask) {
     let dx = 0, dy = 0;
@@ -940,6 +1145,11 @@ export function updateGame(state: GameState, dt: number, keys: Set<string>, now:
 
     if (p.jailed && now >= p.jailedUntil) releasePlayer(p);
 
+    if (p.streakRefund) {
+      p.killCooldown = Math.max(0, p.killCooldown - p.streakRefund);
+      p.arrestCooldown = Math.max(0, p.arrestCooldown - p.streakRefund);
+      p.streakRefund = 0;
+    }
     if (p.killCooldown > 0) p.killCooldown -= dt;
     if (p.arrestCooldown > 0) p.arrestCooldown -= dt;
 
@@ -1021,6 +1231,7 @@ export function updateGame(state: GameState, dt: number, keys: Set<string>, now:
       updateAI(p, state.players, state, now);
     }
 
+    if (isStunned(p, now)) p.direction = { x: 0, y: 0 };
     const boost = (p.speedBoostUntil ?? 0) > now ? SPEED_BOOST_MULT : 1;
     p.x += p.direction.x * p.speed * boost;
     p.y += p.direction.y * p.speed * boost;
@@ -1050,7 +1261,7 @@ export function updateGame(state: GameState, dt: number, keys: Set<string>, now:
   // and tick windows are spaced 0.5-1s apart.
   if (now - _lastBotActionAt >= _nextBotActionGap) {
     const candidates = state.players.filter(p =>
-      p.alive && !p.isHuman && !p.jailed && p.doorBusyUntil === 0
+      p.alive && !p.isHuman && !p.jailed && p.doorBusyUntil === 0 && !isStunned(p, now)
     );
     // Shuffle for fairness
     for (let i = candidates.length - 1; i > 0; i--) {
@@ -1075,6 +1286,9 @@ export function updateGame(state: GameState, dt: number, keys: Set<string>, now:
       Math.random() * (POWERUP_SPAWN_INTERVAL_MAX - POWERUP_SPAWN_INTERVAL_MIN);
   }
   processPowerupPickups(state, now);
+  updateMeteors(state, now);
+  updateTaskFx(state, now);
+  updateLastStand(state, now);
   cleanupSyntheticDoors(state, now);
   cleanupPlatforms(state, now);
 
@@ -1158,7 +1372,7 @@ function computeWinner(state: GameState): TeamIndex | null {
 
 export function humanKill(state: GameState, now: number): boolean {
   const human = state.players[0];
-  if (!human.alive || human.jailed || human.killCooldown > 0) return false;
+  if (!human.alive || human.jailed || human.killCooldown > 0 || isStunned(human, now)) return false;
   if (human.ability !== 'kill' && human.ability !== 'shooter') return false;
   const range = rangeForAbility(human.ability);
   const targets = state.players.filter(p =>
@@ -1173,7 +1387,7 @@ export function humanKill(state: GameState, now: number): boolean {
     if (human.ability === 'shooter') {
       fireBullet(state, human, target, now);
     } else {
-      applyAttack(target);
+      applyAttack(target, human);
     }
     human.killCooldown = KILL_COOLDOWN;
     return true;
@@ -1183,7 +1397,7 @@ export function humanKill(state: GameState, now: number): boolean {
 
 export function humanArrest(state: GameState, now: number): boolean {
   const human = state.players[0];
-  if (!human.alive || human.jailed || human.ability !== 'jail' || human.arrestCooldown > 0) return false;
+  if (!human.alive || human.jailed || human.ability !== 'jail' || human.arrestCooldown > 0 || isStunned(human, now)) return false;
   if (state.jailDuration <= 0) return false;
   const targets = state.players.filter(p =>
     p.alive && p.id !== 0 && !p.jailed && p.team !== human.team &&
@@ -1194,7 +1408,7 @@ export function humanArrest(state: GameState, now: number): boolean {
 
   if (targets.length > 0) {
     const target = targets.reduce((a, b) => dist(human, a) < dist(human, b) ? a : b);
-    arrestPlayer(state, target, now);
+    arrestPlayer(state, target, now, human);
     human.arrestCooldown = ARREST_COOLDOWN;
     return true;
   }

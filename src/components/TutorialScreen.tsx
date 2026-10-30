@@ -34,6 +34,16 @@ export default function TutorialScreen({ onBack }: Props) {
           </div>
 
           <div>
+            <h3 className="text-foreground font-bold mb-1">🚀 Mars Mission — Chaos Rules</h3>
+            <p>• <span className="text-orange-400 font-bold">Meteor showers</span> – red rings warn where rocks land. Get caught = stunned 2s. Every crater drops loot!</p>
+            <p>• <span className="text-green-300 font-bold">Task Surge</span> – every 4 tasks done, the whole crew gets a speed burst.</p>
+            <p>• <span className="text-red-400 font-bold">Last Stand</span> – when only 3 crew remain, they each get a shield + speed.</p>
+            <p>• <span className="text-orange-300 font-bold">Combos</span> – kills / arrests back-to-back (8s) refund your cooldown.</p>
+            <p>• New power-ups: <span className="text-cyan-300">💥 EMP</span> (stuns enemies nearby), <span className="text-green-300">📡 Radar</span> (see everyone), <span className="text-orange-400">🔥 Adrenaline</span> (reset cooldown + sprint), <span className="text-purple-300">💻 Hack</span> (instantly finish a task).</p>
+            <p>• Shields make you immune to stuns.</p>
+          </div>
+
+          <div>
             <h3 className="text-foreground font-bold mb-1">⚽ Football Stadium Mode</h3>
             <p>• Two fixed teams: 6 <span className="text-red-400 font-bold">RED</span> vs 6 <span className="text-blue-400 font-bold">BLUE</span> robots.</p>
             <p>• Run into the ball to kick it – your momentum decides power & direction.</p>

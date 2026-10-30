@@ -1,6 +1,7 @@
 import { getViewTarget } from './spectate';
 import { GameState, Player, PLAYER_RADIUS, TASK_RANGE, FreezeProjectile, JAIL_RECT, JAIL_DURATION, DOOR_INTERACT_RANGE, TEAM_COLORS, TEAM_NAMES, TeamIndex, Platform, BUILDER_BLOCK_LIFETIME } from './types';
-import { Powerup, POWERUP_RADIUS } from './types';
+import { Powerup, POWERUP_RADIUS, Meteor, METEOR_RADIUS } from './types';
+import { stepFx, drawWorldFx, drawScreenFx, shakeOffset } from './juice';
 import { ROOM_WALLS, OBSTACLES, ROOMS, SHELTERS, BILLBOARDS } from './collision';
 
 import crewA from '@/assets/char-crew-a.png';
@@ -56,6 +57,9 @@ export function renderGame(
   const camX = Math.max(0, Math.min(state.mapWidth - canvasW, view.x - canvasW / 2));
   const camY = Math.max(0, Math.min(state.mapHeight - canvasH, view.y - canvasH / 2));
 
+  const nowT = performance.now();
+  stepFx(nowT);
+  const sh = shakeOffset();
   ctx.save();
   ctx.clearRect(0, 0, canvasW, canvasH);
 
@@ -63,6 +67,9 @@ export function renderGame(
   ctx.fillStyle = '#000';
   ctx.fillRect(0, 0, canvasW, canvasH);
 
+  ctx.save();                       // screen-shake layer (world + fog shake, HUD stays steady)
+  ctx.translate(sh.x, sh.y);
+  ctx.save();
   ctx.translate(-camX, -camY);
 
   animTime = performance.now();
@@ -73,6 +80,7 @@ export function renderGame(
   drawDoors(ctx, state);
   drawPlatforms(ctx, state.platforms);
   drawPowerups(ctx, state.powerups);
+  drawMeteors(ctx, state.meteors ?? [], nowT);
 
 
   for (const p of state.players) {
@@ -80,6 +88,7 @@ export function renderGame(
   }
   for (const p of state.players) {
     if (p.alive) drawPlayer(ctx, p, human);
+    if (p.alive && (p.stunnedUntil ?? 0) > nowT) drawStunStars(ctx, p, nowT);
   }
 
   // Bot door-interaction progress rings
@@ -98,6 +107,7 @@ export function renderGame(
 
   // Draw projectiles
   drawProjectiles(ctx, state.projectiles);
+  drawWorldFx(ctx, nowT);
 
   ctx.restore();
 
@@ -124,7 +134,107 @@ export function renderGame(
   ctx.fill();
   ctx.restore();
 
+  // Radar power-up: see every player through the fog
+  if (human.alive && (human.radarUntil ?? 0) > nowT) drawRadar(ctx, state, human, camX, camY, canvasW, canvasH, nowT);
+
+  ctx.restore();                    // end shake layer
+
   drawHUD(ctx, state, canvasW, canvasH);
+
+  if (human.alive && (human.stunnedUntil ?? 0) > nowT) {
+    const left = Math.ceil(((human.stunnedUntil ?? 0) - nowT) / 1000);
+    ctx.save();
+    ctx.fillStyle = 'rgba(80,200,255,0.14)'; ctx.fillRect(0, 0, canvasW, canvasH);
+    ctx.textAlign = 'center'; ctx.font = 'bold 30px monospace';
+    ctx.lineWidth = 6; ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+    ctx.strokeText(`💫 STUNNED ${left}s`, canvasW / 2, canvasH - 80);
+    ctx.fillStyle = '#9fe8ff'; ctx.fillText(`💫 STUNNED ${left}s`, canvasW / 2, canvasH - 80);
+    ctx.restore();
+  }
+  drawScreenFx(ctx, canvasW, canvasH, nowT);
+  ctx.restore();
+}
+
+/* ==================== EFFECT HELPERS ==================== */
+function drawMeteors(ctx: CanvasRenderingContext2D, meteors: Meteor[], now: number) {
+  for (const m of meteors) {
+    if (m.landedAt) {
+      const age = (now - m.landedAt) / 5000;
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, 1 - age);
+      ctx.fillStyle = 'rgba(20,8,4,0.55)';
+      ctx.beginPath(); ctx.ellipse(m.x, m.y, METEOR_RADIUS * 0.8, METEOR_RADIUS * 0.55, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = `rgba(255,${120 + Math.floor(80 * (1 - age))},40,0.9)`; ctx.lineWidth = 3;
+      ctx.stroke();
+      ctx.restore();
+      continue;
+    }
+    if (now < m.warnAt) continue;
+    const t = Math.min(1, (now - m.warnAt) / (m.hitAt - m.warnAt));
+    const blink = 0.5 + 0.5 * Math.sin(now * (0.012 + t * 0.03));
+    ctx.save();
+    ctx.fillStyle = `rgba(255,60,30,${0.08 + 0.14 * t})`;
+    ctx.beginPath(); ctx.arc(m.x, m.y, METEOR_RADIUS, 0, Math.PI * 2); ctx.fill();
+    ctx.setLineDash([10, 8]); ctx.lineWidth = 3;
+    ctx.strokeStyle = `rgba(255,${90 + Math.floor(blink * 120)},60,${0.55 + 0.45 * blink})`;
+    ctx.beginPath(); ctx.arc(m.x, m.y, METEOR_RADIUS, 0, Math.PI * 2); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.strokeStyle = 'rgba(255,230,160,0.9)'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(m.x, m.y, Math.max(6, METEOR_RADIUS * (1 - t)), 0, Math.PI * 2); ctx.stroke();
+    // the rock itself, streaking in during the last part of the countdown
+    const f = Math.max(0, Math.min(1, (t - 0.3) / 0.7)), e = f * f;
+    if (f > 0) {
+      const mx = m.x + 260 * (1 - e), my = m.y - 520 * (1 - e);
+      const tail = ctx.createLinearGradient(mx, my, mx + 120, my - 240);
+      tail.addColorStop(0, 'rgba(255,170,60,0.9)'); tail.addColorStop(1, 'rgba(255,80,0,0)');
+      ctx.strokeStyle = tail; ctx.lineWidth = 16; ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(mx, my); ctx.lineTo(mx + 120, my - 240); ctx.stroke();
+      const g = ctx.createRadialGradient(mx, my, 2, mx, my, 24);
+      g.addColorStop(0, '#fff6c0'); g.addColorStop(0.5, '#ff9a2a'); g.addColorStop(1, 'rgba(255,80,0,0)');
+      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(mx, my, 24, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
+  }
+}
+
+function drawStunStars(ctx: CanvasRenderingContext2D, p: Player, now: number) {
+  ctx.save();
+  ctx.font = '14px sans-serif'; ctx.textAlign = 'center';
+  for (let i = 0; i < 3; i++) {
+    const a = now * 0.008 + (i * Math.PI * 2) / 3;
+    ctx.fillText('⭐', p.x + Math.cos(a) * 18, p.y - PLAYER_RADIUS - 8 + Math.sin(a) * 5);
+  }
+  ctx.restore();
+}
+
+function drawRadar(ctx: CanvasRenderingContext2D, state: GameState, human: Player, camX: number, camY: number, w: number, h: number, now: number) {
+  const left = ((human.radarUntil ?? 0) - now) / 1000;
+  ctx.save();
+  const pulse = 0.5 + 0.5 * Math.sin(now * 0.012);
+  for (const p of state.players) {
+    if (!p.alive || p.id === human.id) continue;
+    const sx = p.x - camX, sy = p.y - camY;
+    const onScreen = sx > 20 && sx < w - 20 && sy > 70 && sy < h - 40;
+    ctx.fillStyle = '#6dff9a'; ctx.strokeStyle = '#6dff9a'; ctx.lineWidth = 2;
+    if (onScreen) {
+      ctx.globalAlpha = 0.9;
+      ctx.beginPath(); ctx.arc(sx, sy, 5, 0, Math.PI * 2); ctx.fill();
+      ctx.globalAlpha = 0.35 + 0.4 * pulse;
+      ctx.beginPath(); ctx.arc(sx, sy, 12 + pulse * 6, 0, Math.PI * 2); ctx.stroke();
+    } else {
+      // edge arrow pointing at the player
+      const cx = w / 2, cy = h / 2, dx = sx - cx, dy = sy - cy;
+      const k = Math.min((w / 2 - 28) / Math.abs(dx || 1e-6), (h / 2 - 50) / Math.abs(dy || 1e-6));
+      const ex = cx + dx * k, ey = Math.max(76, cy + dy * k), ang = Math.atan2(dy, dx);
+      ctx.globalAlpha = 0.85;
+      ctx.save(); ctx.translate(ex, ey); ctx.rotate(ang);
+      ctx.beginPath(); ctx.moveTo(9, 0); ctx.lineTo(-6, -6); ctx.lineTo(-6, 6); ctx.closePath(); ctx.fill();
+      ctx.restore();
+    }
+  }
+  ctx.globalAlpha = 1; ctx.textAlign = 'center'; ctx.font = 'bold 12px monospace';
+  ctx.fillStyle = '#6dff9a'; ctx.fillText(`📡 RADAR ${Math.ceil(left)}s`, w / 2, 100);
+  ctx.restore();
 }
 
 /* ==================== FOOTBALL MODE ==================== */
@@ -625,6 +735,10 @@ function drawPowerups(ctx: CanvasRenderingContext2D, powerups: Powerup[]) {
       speed:   ['#ffe46a', '#c98c1e'],
       life:    ['#ff7a8a', '#a3203a'],
       builder: ['#9ac9ff', '#235a99'],
+      emp:        ['#7fe7ff', '#1d7f99'],
+      radar:      ['#6dff9a', '#1f8a48'],
+      adrenaline: ['#ff7a3a', '#a33a10'],
+      hack:       ['#c58bff', '#5a2aa0'],
     };
     const [fill, stroke] = colors[pu.kind];
     // Outer glow
@@ -672,6 +786,10 @@ function drawPowerups(ctx: CanvasRenderingContext2D, powerups: Powerup[]) {
       ctx.moveTo(-6, 0); ctx.lineTo(6, 0);
       ctx.moveTo(0, -6); ctx.lineTo(0, 6);
       ctx.stroke();
+    } else if (pu.kind === 'emp' || pu.kind === 'radar' || pu.kind === 'adrenaline' || pu.kind === 'hack') {
+      ctx.font = '16px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText({ emp: '💥', radar: '📡', adrenaline: '🔥', hack: '💻' }[pu.kind], 0, 1);
+      ctx.textBaseline = 'alphabetic';
     } else {
       // Wrench
       ctx.lineWidth = 2.2;
@@ -1828,6 +1946,8 @@ function drawHUD(ctx: CanvasRenderingContext2D, state: GameState, w: number, h: 
       chips.push(`⚡ ${secs}s`);
     }
     if ((human.builderCharges ?? 0) > 0) chips.push(`🛠 [B] BUILD x${human.builderCharges}`);
+    if ((human.radarUntil ?? 0) > performance.now()) chips.push(`📡 ${Math.ceil(((human.radarUntil ?? 0) - performance.now()) / 1000)}s`);
+    if ((human.streak ?? 0) >= 2 && performance.now() - (human.lastScoreAt ?? 0) < 8000) chips.push(`🔥 COMBO x${human.streak}`);
     if (chips.length > 0) {
       ctx.textAlign = 'right';
       ctx.font = 'bold 12px monospace';
