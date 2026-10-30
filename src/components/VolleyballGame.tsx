@@ -532,12 +532,60 @@ function drawBall(ctx: CanvasRenderingContext2D, b: VBall, now: number) {
   ctx.restore();
 }
 
+/** Animated Super-Saiyan style flame aura: flickering, licking upward, with a warm glow and rising sparks. */
+function drawAura(ctx: CanvasRenderingContext2D, p: VPlayer, t: number) {
+  const img = volleyballImages.aura;
+  const armed = p.armed;
+  const cx = p.x, cy = p.y - 14;
+  const pulse = 0.5 + 0.5 * Math.sin(t * 0.02 + p.id);
+  ctx.save();
+  // warm light on the scene
+  ctx.globalCompositeOperation = 'lighter';
+  const gr = (armed ? 150 : 115) + pulse * 14;
+  const g = ctx.createRadialGradient(cx, cy, 10, cx, cy, gr);
+  g.addColorStop(0, `rgba(255,230,90,${armed ? 0.5 : 0.32})`); g.addColorStop(1, 'rgba(255,200,40,0)');
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(cx, cy, gr, 0, Math.PI * 2); ctx.fill();
+  ctx.globalCompositeOperation = 'source-over';
+  if (img.naturalWidth > 0) {
+    const aspect = img.naturalWidth / img.naturalHeight;
+    const baseH = armed ? 250 : 215;
+    // three flame layers with different phases/speeds so the tips constantly flicker and lick upward
+    for (let i = 0; i < 3; i++) {
+      const ph = t * (0.011 + i * 0.004) + i * 2.1 + p.id;
+      const sy = 1 + Math.sin(ph) * 0.1 + Math.sin(ph * 2.3) * 0.04;
+      const sx = 1 + Math.cos(ph * 1.3) * 0.06;
+      const h = baseH * (1 - i * 0.07) * sy, w = baseH * aspect * (1 - i * 0.07) * sx;
+      const skew = Math.sin(ph * 1.7) * 0.07;
+      ctx.save();
+      ctx.translate(cx, p.y + 52);                       // anchor at the feet so flames grow upward
+      ctx.transform(1, 0, skew, 1, 0, 0);
+      ctx.globalAlpha = (i === 0 ? 0.95 : 0.55) * (armed ? 1 : 0.8);
+      if (i > 0) ctx.globalCompositeOperation = 'lighter';
+      ctx.scale(i === 1 ? -1 : 1, 1);
+      ctx.drawImage(img, -w / 2, -h, w, h);
+      ctx.restore();
+    }
+  }
+  // rising sparks
+  ctx.globalCompositeOperation = 'lighter';
+  for (let i = 0; i < 7; i++) {
+    const k = ((t * 0.0008 * (0.8 + (i % 3) * 0.3) + i * 0.17) % 1);
+    const sxp = cx + Math.sin(i * 9.1 + t * 0.004) * 42, syp = p.y + 40 - k * 190;
+    ctx.fillStyle = `rgba(255,${200 + (i % 3) * 20},70,${(1 - k) * 0.9})`;
+    ctx.beginPath(); ctx.arc(sxp, syp, 2.5 * (1 - k) + 1, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.restore();
+}
+
 function drawPlayer(ctx: CanvasRenderingContext2D, p: VPlayer, img: HTMLImageElement, t: number) {
   shadow(ctx, p.x, STAND_Y - p.y, 40);
   const col = COLORS[p.side];
   // team-coloured ring at the feet
   ctx.strokeStyle = col; ctx.lineWidth = 5;
   ctx.beginPath(); ctx.ellipse(p.x, GROUND + 14, 40, 10, 0, 0, Math.PI * 2); ctx.stroke();
+
+  // charged power: animated flame aura behind the player (stronger once armed)
+  if (p.meter >= 100) drawAura(ctx, p, t);
 
   const size = 118;
   const squash = p.onGround ? 1 + Math.sin(t * 0.008 + p.id) * 0.015 : 1;
@@ -557,11 +605,6 @@ function drawPlayer(ctx: CanvasRenderingContext2D, p: VPlayer, img: HTMLImageEle
   const wTag = ctx.measureText(label).width + 16;
   ctx.fillStyle = col; ctx.fillRect(p.x - wTag / 2, p.y - 98, wTag, 20);
   ctx.fillStyle = '#fff'; ctx.fillText(label, p.x, p.y - 83);
-  if (p.armed) {
-    ctx.save(); ctx.shadowColor = '#ffe14a'; ctx.shadowBlur = 24;
-    ctx.strokeStyle = `rgba(255,225,74,${0.6 + 0.4 * Math.sin(t * 0.03)})`; ctx.lineWidth = 4;
-    ctx.beginPath(); ctx.ellipse(p.x, p.y - 6, 62, 70, 0, 0, Math.PI * 2); ctx.stroke(); ctx.restore();
-  }
   // your meter is always shown; a bot's meter only appears once it is full (fireball shot incoming)
   if (p.isHuman || p.meter >= 100) drawMeter(ctx, p.x - 35, p.y - 114, 70, 8, p.meter, t);
   if (p.isHuman) {
