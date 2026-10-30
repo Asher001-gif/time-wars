@@ -10,7 +10,6 @@ const STORAGE_KEY = 'timewars.exitBtnPos';
 const STEPS = [
   { icon: '💔', title: 'Is it over for us and you??', sub: 'After everything we have been through.', yes: 'Yes', no: 'No' },
   { icon: '🔥', title: 'Never give up dude!', sub: 'Legends do not rage quit. You sure about this?', yes: 'Yes, I quit', no: 'No, I am back' },
-  { icon: '👑', title: 'Fine. But this game was lucky to have you.', sub: 'Without you, nobody is the main character.', yes: 'Exit anyway', no: 'Stay, champ' },
 ];
 
 export default function DraggableExitButton({ onExit }: Props) {
