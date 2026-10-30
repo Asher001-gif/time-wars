@@ -3,7 +3,7 @@ import crewImg from '@/assets/char-crew-a.png';
 import DraggableExitButton from './DraggableExitButton';
 import RotateDevicePrompt from './RotateDevicePrompt';
 import { useIsMobileDevice, useIsPortrait } from '@/hooks/use-device';
-import { CLOUD_RECTS, preloadVolleyballAssets, volleyballImages } from '@/game/volleyballAssets';
+import { CLOUD_RECTS, FIRE, preloadVolleyballAssets, volleyballImages } from '@/game/volleyballAssets';
 
 /* ===================== CONSTANTS (world is 1600 x 800) ===================== */
 const W = 1600, H = 800;
@@ -18,7 +18,7 @@ const MOVE = 6.2;               // human speed (medium)
 const BOT_MOVE = 5.8;
 const BODY_HW = 48, BODY_TOP = 60, BODY_BOT = 48; // body box around player centre (head to feet)
 const METER_GAIN = 10;          // % of the power meter each hit fills (10 hits = full)
-const POWER_SPEED = 27;         // speed of a full-meter lightning shot
+const POWER_SPEED = 27;         // speed of a full-meter fireball shot
 const REACH = 105;              // how far a player can hit the ball
 const MAX_BALL_V = 17;
 const DT = 1000 / 60;
@@ -161,7 +161,7 @@ function doHit(s: VState, p: VPlayer, intent: Intent, power = 1) {
   const b = s.ball;
   const dir = dirOf(p.side);
   const airborne = p.y < STAND_Y - 30;
-  // FULL METER => lightning shot: very fast, straight toward the other side (as flat as the net allows)
+  // FULL METER => fireball shot: very fast, straight toward the other side (as flat as the net allows)
   if (intent !== 'set' && p.meter >= 100 && (p.armed || !p.isHuman)) {
     let vx = dir * POWER_SPEED * 0.95, vy = -POWER_SPEED * 0.1;
     for (let ang = -0.3; ang <= 1.2; ang += 0.04) {
@@ -448,41 +448,34 @@ function shadow(ctx: CanvasRenderingContext2D, x: number, height: number, w: num
   ctx.beginPath(); ctx.ellipse(x, GROUND + 14, w * k, 9 * k, 0, 0, Math.PI * 2); ctx.fill();
 }
 
-function lightning(ctx: CanvasRenderingContext2D, pts: { x: number; y: number }[], jitter: number) {
-  ctx.beginPath();
-  pts.forEach((q, i) => {
-    const jx = i === 0 || i === pts.length - 1 ? 0 : (Math.random() - 0.5) * jitter;
-    const jy = i === 0 || i === pts.length - 1 ? 0 : (Math.random() - 0.5) * jitter;
-    if (i === 0) ctx.moveTo(q.x + jx, q.y + jy); else ctx.lineTo(q.x + jx, q.y + jy);
-  });
-  ctx.stroke();
-}
-
-function drawLightning(ctx: CanvasRenderingContext2D, b: VBall) {
+/** Animated fire power-up ball. The sprite's head leads and its tail trails, so it is rotated to follow the flight direction. */
+function drawFireball(ctx: CanvasRenderingContext2D, b: VBall, now: number) {
+  const img = volleyballImages.fire;
+  const ready = img.naturalWidth > 0;
+  // warm light thrown on the (darkened) scene around the ball
   ctx.save();
-  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-  ctx.shadowColor = '#7fe7ff'; ctx.shadowBlur = 22;
-  // glowing aura
-  ctx.fillStyle = 'rgba(255,240,120,0.35)';
-  ctx.beginPath(); ctx.arc(b.x, b.y, BALL_R + 12 + Math.random() * 6, 0, Math.PI * 2); ctx.fill();
-  // crackling trail behind the ball
-  const trail = [...b.trail, { x: b.x, y: b.y }];
-  if (trail.length > 1) {
-    ctx.strokeStyle = 'rgba(80,200,255,0.55)'; ctx.lineWidth = 10; lightning(ctx, trail, 26);
-    ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 4; lightning(ctx, trail, 22);
+  ctx.globalCompositeOperation = 'lighter';
+  const glowR = 150 + Math.sin(now * 0.03) * 12;
+  const g = ctx.createRadialGradient(b.x, b.y, 10, b.x, b.y, glowR);
+  g.addColorStop(0, 'rgba(255,170,50,0.45)'); g.addColorStop(0.5, 'rgba(255,100,20,0.16)'); g.addColorStop(1, 'rgba(255,80,0,0)');
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(b.x, b.y, glowR, 0, Math.PI * 2); ctx.fill();
+  // embers drifting off the trail
+  for (let i = 0; i < b.trail.length; i += 2) {
+    const q = b.trail[i], k = i / b.trail.length;
+    const jx = Math.sin(now * 0.02 + i * 7.1) * 10, jy = Math.cos(now * 0.017 + i * 3.7) * 10 - (1 - k) * 8;
+    ctx.fillStyle = `rgba(255,${120 + Math.floor(k * 100)},40,${0.15 + k * 0.5})`;
+    ctx.beginPath(); ctx.arc(q.x + jx, q.y + jy, 1.5 + k * 3, 0, Math.PI * 2); ctx.fill();
   }
-  // bolts thrown forward in the shot direction
-  const base = Math.atan2(b.vy, b.vx);
-  for (let k = 0; k < 5; k++) {
-    const ang = base + (Math.random() - 0.5) * 1.3;
-    const len = 50 + Math.random() * 70;
-    const pts = [{ x: b.x, y: b.y }];
-    for (let i = 1; i <= 4; i++) {
-      const d = (len * i) / 4;
-      pts.push({ x: b.x + Math.cos(ang) * d + (Math.random() - 0.5) * 16, y: b.y + Math.sin(ang) * d + (Math.random() - 0.5) * 16 });
-    }
-    ctx.strokeStyle = k % 2 ? '#fff6a8' : '#b8f1ff'; ctx.lineWidth = 3; lightning(ctx, pts, 0);
-  }
+  ctx.restore();
+  if (!ready) return;
+  const frame = Math.floor(now / 42) % FIRE.frames;           // ~24 fps loop
+  const sx = (frame % FIRE.cols) * FIRE.w, sy = Math.floor(frame / FIRE.cols) * FIRE.h;
+  const ang = Math.atan2(b.vy, b.vx);
+  const k = 0.6;                                              // sprite -> world scale (head is ~60 px across)
+  ctx.save();
+  ctx.translate(b.x, b.y); ctx.rotate(ang);
+  if (Math.cos(ang) < 0) ctx.scale(1, -1);                    // keep the flame the right way up when flying left
+  ctx.drawImage(img, sx, sy, FIRE.w, FIRE.h, -FIRE.cx * k, -FIRE.cy * k, FIRE.w * k, FIRE.h * k);
   ctx.restore();
 }
 
@@ -502,9 +495,10 @@ function drawMeter(ctx: CanvasRenderingContext2D, x: number, y: number, w: numbe
   ctx.restore();
 }
 
-function drawBall(ctx: CanvasRenderingContext2D, b: VBall) {
+function drawBall(ctx: CanvasRenderingContext2D, b: VBall, now: number) {
   shadow(ctx, b.x, GROUND - b.y, BALL_R);
-  if (b.fire) drawLightning(ctx, b);
+  if (b.fire && volleyballImages.fire.naturalWidth > 0) { drawFireball(ctx, b, now); return; }
+  if (b.fire) drawFireball(ctx, b, now);
   ctx.save();
   ctx.translate(b.x, b.y); ctx.rotate(b.rot);
   ctx.beginPath(); ctx.arc(0, 0, BALL_R, 0, Math.PI * 2);
@@ -553,7 +547,7 @@ function drawPlayer(ctx: CanvasRenderingContext2D, p: VPlayer, img: HTMLImageEle
     ctx.strokeStyle = `rgba(255,225,74,${0.6 + 0.4 * Math.sin(t * 0.03)})`; ctx.lineWidth = 4;
     ctx.beginPath(); ctx.ellipse(p.x, p.y - 6, 62, 70, 0, 0, Math.PI * 2); ctx.stroke(); ctx.restore();
   }
-  // your meter is always shown; a bot's meter only appears once it is full (lightning shot incoming)
+  // your meter is always shown; a bot's meter only appears once it is full (fireball shot incoming)
   if (p.isHuman || p.meter >= 100) drawMeter(ctx, p.x - 35, p.y - 114, 70, 8, p.meter, t);
   if (p.isHuman) {
     ctx.fillStyle = '#ffe14a';
@@ -601,6 +595,8 @@ function drawHUD(ctx: CanvasRenderingContext2D, s: VState) {
   }
 }
 
+let darkness = 0, darkT = 0;   // 0..1, eased toward 1 while the ball is on fire
+
 function render(ctx: CanvasRenderingContext2D, s: VState, cw: number, ch: number, dpr: number, img: HTMLImageElement) {
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   const scale = Math.min(cw / W, ch / H);
@@ -609,10 +605,20 @@ function render(ctx: CanvasRenderingContext2D, s: VState, cw: number, ch: number
   ctx.save();
   const now = performance.now();
   // the scenery is drawn over the entire screen; only the playing area stays 1600 x 800
-  drawBackground(ctx, -ox / scale, -oy / scale, (cw - ox) / scale, (ch - oy) / scale, now);
+  const x0 = -ox / scale, y0 = -oy / scale, x1 = (cw - ox) / scale, y1 = (ch - oy) / scale;
+  drawBackground(ctx, x0, y0, x1, y1, now);
+  // fire power-up: dim the sky, clouds, sea and sand (everything BEHIND the net and players) for atmosphere
+  const dt = darkT ? Math.min(100, now - darkT) : 16; darkT = now;
+  const want = s.ball.fire && s.phase === 'play' ? 1 : 0;
+  darkness += (want - darkness) * Math.min(1, dt / (want ? 250 : 400));
+  if (darkness < 0.01) darkness = 0;
+  if (darkness > 0) {
+    ctx.fillStyle = `rgba(6,10,32,${0.5 * darkness})`;
+    ctx.fillRect(x0 - 2, Math.min(0, y0) - 2, x1 - x0 + 4, Math.max(H, y1) - Math.min(0, y0) + 4);
+  }
   drawNet(ctx);
   s.players.forEach(p => drawPlayer(ctx, p, img, now));
-  drawBall(ctx, s.ball);
+  drawBall(ctx, s.ball, now);
   drawHUD(ctx, s);
   ctx.restore();
 }
@@ -737,8 +743,8 @@ export default function VolleyballGame({ target, playerName, onExit }: Props) {
             You are {NAMES[mySide]} TEAM. Land the ball on the {enemy} side to win.
             <div className="text-xs sm:text-base font-normal mt-2 opacity-80">
               {isMobile
-                ? 'JUMP then HIT = hard spike • SET = pass to your mate • ⚡ = lightning shot when POWER is full'
-                : 'A/D move • W jump • SPACE hit (jump first = hard spike) • hold S + SPACE = set for your mate • 5 = lightning shot when POWER is full'}
+                ? 'JUMP then HIT = hard spike • SET = pass to your mate • ⚡ = fireball shot when POWER is full'
+                : 'A/D move • W jump • SPACE hit (jump first = hard spike) • hold S + SPACE = set for your mate • 5 = fireball shot when POWER is full'}
             </div>
           </div>
         </div>
