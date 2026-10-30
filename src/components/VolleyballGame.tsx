@@ -4,6 +4,7 @@ import DraggableExitButton from './DraggableExitButton';
 import RotateDevicePrompt from './RotateDevicePrompt';
 import { useIsMobileDevice, useIsPortrait } from '@/hooks/use-device';
 import { CLOUD_RECTS, FIRE, preloadVolleyballAssets, volleyballImages } from '@/game/volleyballAssets';
+import { drawFx, fxArmed, fxFire, fxHit, fxNet, fxOver, fxPoint, fxRally, fxReady, fxSet, fxSpike, fxWhistle, getLastKind, isMuted, resetFx, resetKind, setMuted, shakeOffset, unlockAudio } from '@/game/volleyballFx';
 
 /* ===================== CONSTANTS (world is 1600 x 800) ===================== */
 const W = 1600, H = 800;
@@ -92,6 +93,7 @@ function startServe(s: VState) {
   s.ball = { x, y: 300, vx: 0, vy: 0, rot: 0, side: s.serveSide, touches: 0, lastHitter: -1, rally: 0, lastHitT: -9999, fire: false, trail: [] };
   s.phase = 'serve';
   s.until = s.t + 1400;
+  resetKind();
 }
 
 /* ===================== PHYSICS / RULES ===================== */
@@ -170,9 +172,12 @@ function doHit(s: VState, p: VPlayer, intent: Intent, power = 1) {
     }
     b.vx = vx; b.vy = vy; b.touches++; b.lastHitter = p.id; b.lastHitT = s.t; b.rally++;
     b.fire = true; b.trail = []; p.meter = 0; p.armed = false; p.facing = dir;
+    fxFire(b.x, b.y, b.rally);
     return;
   }
+  const meterBefore = p.meter;
   p.meter = Math.min(100, p.meter + METER_GAIN);
+  if (p.isHuman && meterBefore < 100 && p.meter >= 100) fxReady();
   b.fire = false; b.trail = [];
   let vx: number, vy: number;
   if (intent === 'set') {
@@ -220,13 +225,23 @@ function doHit(s: VState, p: VPlayer, intent: Intent, power = 1) {
   b.rally++;
   b.vx = vx; b.vy = vy; b.touches++; b.lastHitter = p.id; b.lastHitT = s.t;
   p.facing = dir;
+  if (intent === 'set') fxSet(b.x, b.y);
+  else if (isSpike) fxSpike(b.x, b.y);
+  else fxHit(b.rally, b.x, b.y);
+  fxRally(b.rally);
 }
 
 function scorePoint(s: VState, winner: Side) {
+  const b = s.ball;
+  const lh = s.players.find(q => q.id === b.lastHitter);
+  const kind = lh && lh.side !== winner ? 'error' : (b.fire ? 'fire' : getLastKind());
   s.score[winner]++;
   s.serveSide = winner;
   s.pointMsg = `POINT ${NAMES[winner]}!`;
-  if (s.score[winner] >= s.target) s.phase = 'over';
+  const over = s.score[winner] >= s.target;
+  const matchPoint = !over && (s.score.L === s.target - 1 || s.score.R === s.target - 1);
+  fxPoint(kind, winner === s.humanSide, winner, matchPoint, b.x, b.y);
+  if (over) { s.phase = 'over'; fxOver(winner === s.humanSide); }
   else { s.phase = 'point'; s.until = s.t + 1500; }
 }
 
@@ -288,7 +303,7 @@ function humanControl(s: VState, p: VPlayer, inp: Input) {
   p.vx = dx * MOVE;
   p.x = clamp(p.x + p.vx, minX, maxX);
   if (dx !== 0) p.facing = dx;
-  if (inp.powerBuf > 0) { if (p.meter >= 100) p.armed = true; inp.powerBuf = 0; }
+  if (inp.powerBuf > 0) { if (p.meter >= 100 && !p.armed) { p.armed = true; fxArmed(); } inp.powerBuf = 0; }
   if (inp.jumpBuf > 0 && p.onGround) { p.vy = JUMP_V; p.onGround = false; inp.jumpBuf = 0; }
   if (inp.hitBuf > 0 && canHit(s, p)) {
     const b = s.ball;
@@ -311,7 +326,7 @@ function step(s: VState, inp: Input) {
     if (s.t >= s.until) startServe(s);
     return;
   }
-  if (s.phase === 'serve' && s.t >= s.until) s.phase = 'play';
+  if (s.phase === 'serve' && s.t >= s.until) { s.phase = 'play'; fxWhistle(); }
 
   for (const p of s.players) {
     if (p.isHuman) humanControl(s, p, inp); else botAI(s, p);
@@ -337,7 +352,7 @@ function step(s: VState, inp: Input) {
     if (nd === 0) { ndx = 0; ndy = -1; } else { ndx /= nd; ndy /= nd; }
     b.x = cx + ndx * BALL_R; b.y = cy + ndy * BALL_R;
     const vn = b.vx * ndx + b.vy * ndy;
-    if (vn < 0) { b.vx -= 1.6 * vn * ndx; b.vy -= 1.6 * vn * ndy; }
+    if (vn < 0) { b.vx -= 1.6 * vn * ndx; b.vy -= 1.6 * vn * ndy; if (-vn > 2) fxNet(); }
   }
 
   // crossing the net resets the touch count for the receiving team
@@ -604,6 +619,8 @@ function render(ctx: CanvasRenderingContext2D, s: VState, cw: number, ch: number
   ctx.setTransform(scale * dpr, 0, 0, scale * dpr, ox * dpr, oy * dpr);
   ctx.save();
   const now = performance.now();
+  const [shx, shy] = shakeOffset();
+  ctx.translate(shx, shy);
   // the scenery is drawn over the entire screen; only the playing area stays 1600 x 800
   const x0 = -ox / scale, y0 = -oy / scale, x1 = (cw - ox) / scale, y1 = (ch - oy) / scale;
   drawBackground(ctx, x0, y0, x1, y1, now);
@@ -620,6 +637,7 @@ function render(ctx: CanvasRenderingContext2D, s: VState, cw: number, ch: number
   s.players.forEach(p => drawPlayer(ctx, p, img, now));
   drawBall(ctx, s.ball, now);
   drawHUD(ctx, s);
+  drawFx(ctx, now, x0, y0, x1, y1);
   ctx.restore();
 }
 
@@ -632,11 +650,21 @@ export default function VolleyballGame({ target, playerName, onExit }: Props) {
   const inputRef = useRef<Input>({ left: false, right: false, jumpBuf: 0, hitBuf: 0, setHeld: false, powerBuf: 0 });
   const imgRef = useRef<HTMLImageElement>(new Image());
   const [banner, setBanner] = useState(true);
+  const [muted, setMutedState] = useState(isMuted());
   const [result, setResult] = useState<null | { won: boolean; l: number; r: number }>(null);
   const isMobile = useIsMobileDevice();
   const isPortrait = useIsPortrait();
 
-  useEffect(() => { imgRef.current.src = crewImg; preloadVolleyballAssets(); }, []);
+  useEffect(() => { imgRef.current.src = crewImg; preloadVolleyballAssets(); resetFx(); }, []);
+
+  // browsers only allow sound after a user gesture
+  useEffect(() => {
+    unlockAudio();
+    const go = () => unlockAudio();
+    window.addEventListener('pointerdown', go); window.addEventListener('keydown', go); window.addEventListener('touchstart', go);
+    return () => { window.removeEventListener('pointerdown', go); window.removeEventListener('keydown', go); window.removeEventListener('touchstart', go); };
+  }, []);
+  const toggleMute = () => { const m = !isMuted(); setMuted(m); setMutedState(m); };
   useEffect(() => { const t = setTimeout(() => setBanner(false), 4500); return () => clearTimeout(t); }, []);
 
   // keyboard (desktop)
@@ -647,6 +675,7 @@ export default function VolleyballGame({ target, playerName, onExit }: Props) {
       if (k === 'a' || k === 'arrowleft') i.left = true;
       else if (k === 'd' || k === 'arrowright') i.right = true;
       else if (k === 's' || k === 'arrowdown') i.setHeld = true;
+      else if (k === 'm' && !e.repeat) { const m = !isMuted(); setMuted(m); setMutedState(m); }
       else if (k === '5' && !e.repeat) i.powerBuf = 10;
       else if ((k === 'w' || k === 'arrowup') && !e.repeat) { i.jumpBuf = 8; e.preventDefault(); }
       else if ((k === ' ' || k === 'k' || k === 'enter') && !e.repeat) { i.hitBuf = 10; e.preventDefault(); }
@@ -733,6 +762,14 @@ export default function VolleyballGame({ target, playerName, onExit }: Props) {
   return (
     <div className="fixed inset-0 bg-black overflow-hidden" style={{ touchAction: 'none' }}>
       <canvas ref={canvasRef} className="block" />
+
+      <button
+        onClick={toggleMute}
+        className="fixed left-2 top-14 z-[60] w-10 h-10 rounded-full bg-black/60 border-2 border-white/60 text-white text-lg select-none"
+        aria-label={muted ? 'Unmute' : 'Mute'}
+      >
+        {muted ? '🔇' : '🔊'}
+      </button>
 
       {banner && (
         <div className="fixed inset-x-0 top-[22%] z-[70] flex justify-center px-4 pointer-events-none select-none">
