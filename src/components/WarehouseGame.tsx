@@ -17,7 +17,7 @@ interface G {
   walls: Rect[]; obs: Obs[]; chests: Chest[]; crates: Crate[]; plates: Plate[]; bats: Bat[];
   p: { x: number; y: number; hidden: Crate | null; face: number; aim: number; dir: 'up' | 'down' | 'left' | 'right' };
   m: Mon; battery: number; keys: number; time: number; toast: string; toastT: number;
-  stepT: number; batT: number; dead: string; shock: boolean; deadT: number; noiseFx: { x: number; y: number; t: number }[];
+  stepT: number; batT: number; dead: string; hbT: number; gT: number; shock: boolean; deadT: number; noiseFx: { x: number; y: number; t: number }[];
 }
 type Best = { time: number; score: number };
 const readBest = (): Best => { try { return JSON.parse(localStorage.getItem(KEY) || '') as Best; } catch { return { time: 0, score: 0 }; } };
@@ -74,7 +74,7 @@ function build(): G {
   return {
     walls, obs, chests, crates, plates, bats: [], p: { x: 880, y: 1000, hidden: null, face: 0, aim: Math.PI / 2, dir: 'down' },
     m: { x: rnd(3400, 4600), y: rnd(200, 1800), state: 'wander', t: 0, tx: WW / 2, ty: WH / 2, a: 1, dir: 1, anim: 0, sawHide: false, next: rnd(6, 10), det: 0, detT: 0, stuck: 0 },
-    battery: 100, keys: 0, time: 0, toast: '', toastT: 0, stepT: 0, batT: 6, dead: '', shock: false, deadT: 0, noiseFx: [],
+    battery: 100, keys: 0, time: 0, toast: '', toastT: 0, stepT: 0, batT: 6, dead: '', hbT: 0, gT: 0, shock: false, deadT: 0, noiseFx: [],
   };
 }
 
@@ -213,7 +213,7 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
       }
       if (p.hidden) { p.x = p.hidden.x + p.hidden.w / 2; p.y = p.hidden.y + p.hidden.h / 2; }
       // monster
-      const spd = 130 + Math.min(70, g.time * 0.35);
+      const spd = 150 + Math.min(75, g.time * 0.4);
       const d = Math.hypot(m.x - p.x, m.y - p.y);
       m.t += dt;
       const go = (tx: number, ty: number, sp: number) => {
@@ -237,10 +237,10 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
       const pick = () => { for (let i = 0; i < 20; i++) { const tx = rnd(100, WW - 100), ty = rnd(120, WH - 100); if (!blocked(tx, ty)) { m.tx = tx; m.ty = ty; break; } } m.stuck = 0; m.t = 0; };
       const light = 70 + 230 * (g.battery / 100);
       const sees = !p.hidden && d < Math.min(340, light + 80) && los(m.x, m.y, p.x, p.y);
-      if ((m.state === 'wander' || m.state === 'search') && sees) { m.state = 'hunt'; m.tx = p.x; m.ty = p.y; m.t = 0; beep(70, 0.4, 'sawtooth', 0.08); }
+      if ((m.state === 'wander' || m.state === 'search') && sees) { m.state = 'hunt'; m.tx = p.x; m.ty = p.y; m.t = 0; beep(70, 0.4, 'sawtooth', 0.08); beep(1400, 0.3, 'sawtooth', 0.04); }
       if (m.state === 'wander') {
         m.a = Math.min(1, m.a + dt * 2);
-        if (go(m.tx, m.ty, 65) < 30 || m.t > 9 || m.stuck > 1.5) pick();
+        if (go(m.tx, m.ty, 75) < 30 || m.t > 9 || m.stuck > 1.5) pick();
         m.next -= dt; if (m.next <= 0) { m.state = 'freeze'; m.t = 0; }
       } else if (m.state === 'freeze') { if (m.t > 2.8) { m.state = 'vanish'; m.t = 0; } }
       else if (m.state === 'vanish') { m.a = Math.max(0, 1 - m.t / 1.2); if (m.t > 1.2) { m.state = 'gone'; m.t = 0; m.next = rnd(3, 6); } }
@@ -262,7 +262,16 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
         } else if (m.t > 14 || m.stuck > 2.5) { m.state = 'search'; m.t = 0; m.stuck = 0; }
       } else if (m.state === 'search') {
         m.a = 1; if (m.t % 2 < dt) { m.tx = m.x + rnd(-200, 200); m.ty = m.y + rnd(-200, 200); }
-        go(m.tx, m.ty, 70); if (m.t > 6) { m.state = 'wander'; m.t = 0; m.next = rnd(6, 10); pick(); }
+        go(m.tx, m.ty, 80); if (m.t > 6) { m.state = 'wander'; m.t = 0; m.next = rnd(6, 10); pick(); }
+      }
+      // horror audio: heartbeat that speeds up + growls as the monster closes in
+      if (m.a > 0.2 && m.state !== 'gone') {
+        const prox = Math.max(0, 1 - d / 900);
+        if (prox > 0) {
+          g.hbT -= dt;
+          if (g.hbT <= 0) { g.hbT = 1.1 - prox * 0.75; const v = 0.04 + prox * 0.16; beep(55, 0.18, 'sine', v); setTimeout(() => beep(48, 0.2, 'sine', v * 0.8), 150); }
+          if (m.state === 'hunt' && d < 450) { g.gT -= dt; if (g.gT <= 0) { g.gT = 1.4; beep(rnd(55, 90), 0.5, 'sawtooth', 0.03 + prox * 0.06); } }
+        }
       }
       if (!p.hidden && m.a > 0.5 && d < 44) die('The monster got you.', true);
       g.noiseFx.forEach(n => (n.t -= dt)); g.noiseFx = g.noiseFx.filter(n => n.t > 0);
