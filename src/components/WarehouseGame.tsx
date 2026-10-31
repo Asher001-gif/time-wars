@@ -2,16 +2,13 @@ import { useEffect, useRef, useState } from 'react';
 import crackUrl from '@/assets/warehouse/crack.png';
 import DraggableExitButton from './DraggableExitButton';
 import { loadWarehouseAssets, WhImages } from '@/game/warehouseAssets';
+import { buildLayout, WW, WH, type Rect, type Obs, type Decal, type PlateT } from '@/game/warehouseLayout';
 
-const WW = 4800, WH = 3200, WT = 30;
 const MS = 3, MC = 88; // walker monster: 88px pixel-art cells (9 walk frames x 8 directions: E SE S SW W NW N NE) drawn at 3x, feet at (44,82)
 const KEY = 'warehouse.best';
-type Rect = { x: number; y: number; w: number; h: number };
-type Obs = Rect & { img: 'cWide' | 'cTall' | 'cSmall' | 'bStripe' | 'bPlain' | 'bed' | 'chair' | 'table' | 'candle' | 'skull' | 'teddy' | 'plant' };
-type Decal = Rect & { img: 'help' | 'run' };
 type Chest = Rect & { key: boolean; bat: boolean; openUntil: number };
 type Crate = Rect;
-type Plate = { x: number; y: number; cd: number };
+type Plate = PlateT;
 type Bat = { x: number; y: number };
 type Mon = { x: number; y: number; state: 'wander' | 'freeze' | 'vanish' | 'gone' | 'hunt' | 'search'; t: number; tx: number; ty: number; a: number; dir: number; anim: number; sawHide: boolean; next: number; det: number; detT: number; stuck: number; vx: number; vy: number; sv: number; d8: number; pd: number; db: number };
 interface G {
@@ -39,47 +36,12 @@ function beep(f: number, d: number, type: OscillatorType = 'square', v = 0.05) {
 }
 
 function build(): G {
-  const walls: Rect[] = [], doors: { x: number; y: number }[] = [];
-  const hw = (x1: number, x2: number, y: number, gaps: number[]) => {
-    let cur = x1;
-    for (const c of [...gaps].sort((a, b) => a - b)) { if (c - 90 > cur) walls.push({ x: cur, y: y - WT / 2, w: c - 90 - cur, h: WT }); cur = c + 90; doors.push({ x: c, y }); }
-    if (x2 > cur) walls.push({ x: cur, y: y - WT / 2, w: x2 - cur, h: WT });
-  };
-  const vw = (y1: number, y2: number, x: number, gaps: number[]) => {
-    let cur = y1;
-    for (const c of [...gaps].sort((a, b) => a - b)) { if (c - 90 > cur) walls.push({ x: x - WT / 2, y: cur, w: WT, h: c - 90 - cur }); cur = c + 90; doors.push({ x, y: c }); }
-    if (y2 > cur) walls.push({ x: x - WT / 2, y: cur, w: WT, h: y2 - cur });
-  };
-  // Warehouse building: 3 rooms side by side, backyard to the south
-  hw(80, 4720, 80, []); hw(80, 4720, 2100, [880, 2480, 4000]);
-  vw(80, 2100, 80, []); vw(80, 2100, 4720, []);
-  vw(80, 2100, 1680, [1100]); vw(80, 2100, 3280, [1500]);
-  const obs: Obs[] = [], chests: Chest[] = [], crates: Crate[] = [];
-  const all: Rect[] = [...walls, { x: 680, y: 800, w: 400, h: 400 }, ...doors.map(d => ({ x: d.x - 140, y: d.y - 140, w: 280, h: 280 }))];
-  const place = (w: number, h: number, yMax = WH - 140): Rect | null => {
-    for (let i = 0; i < 300; i++) {
-      const r = { x: rnd(140, WW - 140 - w), y: rnd(140, yMax - h), w, h };
-      if (!all.some(o => hit(r, o, 150))) { all.push(r); return r; }
-    }
-    return null;
-  };
-  const sizes: [Obs['img'], number, number][] = [['cWide', 230, 156], ['cTall', 132, 196], ['cSmall', 112, 152], ['bStripe', 180, 98], ['bPlain', 184, 98]];
-  for (let i = 0; i < 70; i++) { const [img, w, h] = sizes[i % 5]; const r = place(w, h); if (r) obs.push({ ...r, img }); }
-  for (let i = 0; i < 22; i++) { const r = place(58, 54); if (r) chests.push({ ...r, key: false, bat: false, openUntil: 0 }); }
-  for (let i = 0; i < 16; i++) { const r = place(92, 88); if (r) crates.push(r); }
-  // furniture & props (solid) – indoor pieces stay inside the building, plants/skulls can be anywhere
-  const furn: [Obs['img'], number, number, number, number][] = [
-    ['bed', 104, 167, 6, 2060], ['chair', 80, 109, 10, 2060], ['table', 142, 150, 8, 2060], ['plant', 80, 77, 10, 3000],
-    ['teddy', 69, 73, 6, 2060], ['skull', 38, 46, 8, 3000], ['candle', 26, 58, 10, 2060],
-  ];
-  for (const [img, w, h, n, ym] of furn) for (let i = 0; i < n; i++) { const r = place(w, h, ym); if (r) obs.push({ ...r, img }); }
-  const decals: Decal[] = []; // scrawled floor writing (not solid)
-  for (let i = 0; i < 8; i++) { const img = i % 2 ? 'run' : 'help'; const [w, h] = img === 'help' ? [144, 127] : [126, 134]; const r = place(w, h, 2060); if (r) decals.push({ ...r, img }); }
+  const L = buildLayout();
+  const chests: Chest[] = L.chests.map(r => ({ ...r, key: false, bat: false, openUntil: 0 }));
+  const { walls, obs, crates, decals, plates } = L;
   chests[Math.floor(Math.random() * chests.length)].key = true;
   const cand = chests.filter(c => !c.key).sort(() => Math.random() - 0.5);
   cand.slice(0, 7).forEach(c => (c.bat = true));
-  const plates: Plate[] = []; // plates are floor tiles: never solid, kept clear of walls/objects/doorways and each other
-  for (let i = 0; i < 18; i++) { const r = place(46, 46); if (r) plates.push({ x: r.x + 23, y: r.y + 23, cd: 0 }); }
   return {
     walls, decals, obs, chests, crates, plates, bats: [], p: { x: 880, y: 1000, hidden: null, face: 0, aim: Math.PI / 2, dir: 'down' },
     m: { x: rnd(3400, 4600), y: rnd(200, 1800), state: 'wander', t: 0, tx: WW / 2, ty: WH / 2, a: 1, dir: 1, anim: 0, sawHide: false, next: rnd(6, 10), det: 0, detT: 0, stuck: 0, vx: 0, vy: 0, sv: 0, d8: 2, pd: 2, db: 1 },
