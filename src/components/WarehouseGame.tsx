@@ -348,7 +348,6 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
         dctx.closePath(); dctx.fill();
       };
       const L = rad * 1.7;
-      cut(4, rad * 0.6, 0.5, 0.3, null);          // soft dim glow around the robot
       cut(8, L * 0.9, 0.45, 0.3, 0.7);            // wide dim cone
       cut(8, L, 0.9, 0.7, 0.36);                  // bright spotlight in the facing direction
       ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.drawImage(dark, 0, 0);
