@@ -100,6 +100,12 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
       for (let i = 1; i < n; i++) { const x = ax + (bx - ax) * i / n, y = ay + (by - ay) * i / n; if (SS.some(o => x > o.x && x < o.x + o.w && y > o.y && y < o.y + o.h)) return false; }
       return true;
     };
+    // start: the monster appears somewhere random, a little way from where you spawn (never on top of you)
+    for (let i = 0; i < 300; i++) {
+      const ang = Math.random() * 6.2832, r = rnd(650, 1100);
+      const nx = g.p.x + Math.cos(ang) * r, ny = g.p.y + Math.sin(ang) * r;
+      if (nx > 100 && nx < WW - 100 && ny > 140 && ny < WH - 60 && !blocked(nx, ny)) { g.m.x = nx; g.m.y = ny; break; }
+    }
     for (let i = 0; i < 60 && blocked(g.m.x, g.m.y); i++) { g.m.x = rnd(200, WW - 200); g.m.y = rnd(200, WH - 200); }
     const moveP = (dx: number, dy: number) => {
       const p = g.p, R = 14, ss = solids();
@@ -139,7 +145,7 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
       }
       if (moving) p.dir = Math.abs(ix) > Math.abs(iy) ? (ix > 0 ? 'right' : 'left') : (iy > 0 ? 'down' : 'up');
       const run = runLock.current && moving;
-      g.battery -= (p.hidden ? 0.35 : run ? 1.0 : 0.6) * dt;
+      g.battery -= (p.hidden ? 0.6 * 3 : run ? 1.0 : 0.6) * dt; // hiding drains 3x faster than normal
       if (g.battery <= 0) { g.battery = 0; die('Your battery ran out.'); return; }
       if (moving) {
         const sp = run ? 215 : 120; moveP(ix * sp * dt, iy * sp * dt); if (ix) p.face = ix;
@@ -302,7 +308,7 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
       for (const n of g.noiseFx) { ctx.strokeStyle = `rgba(255,255,255,${n.t})`; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(n.x, n.y, (0.6 - n.t) * 500, 0, 6.28); ctx.stroke(); }
       // darkness + flashlight
       dctx.setTransform(1, 0, 0, 1, 0, 0); dctx.globalCompositeOperation = 'source-over'; dctx.clearRect(0, 0, W, H);
-      dctx.fillStyle = `rgba(0,0,0,${0.9 + 0.08 * (1 - g.battery / 100)})`; dctx.fillRect(0, 0, W, H); // dim ambient: only a faint glimmer outside the spotlight
+      dctx.fillStyle = `rgba(0,0,0,${0.94 + 0.05 * (1 - g.battery / 100)})`; dctx.fillRect(0, 0, W, H); // dim ambient: only a faint glimmer outside the spotlight
       const dm = Math.hypot(m.x - p.x, m.y - p.y);
       let rad = (60 + 240 * (g.battery / 100)) * z; let inten = 1;
       if (g.battery < 20) inten *= 0.75 + 0.25 * Math.sin(g.time * 30);
@@ -319,7 +325,7 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
         dctx.closePath(); dctx.fill();
       };
       const L = rad * 1.7;
-      cut(8, L * 0.9, 0.34, 0.2, 0.7);            // wide dim cone
+      cut(8, L * 0.9, 0.3, 0.17, 0.7);            // wide dim cone
       cut(8, L, 0.9, 0.7, 0.36);                  // bright spotlight in the facing direction
       ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.drawImage(dark, 0, 0);
       // HUD
