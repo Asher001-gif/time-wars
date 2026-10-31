@@ -10,7 +10,7 @@ type Chest = Rect & { key: boolean; bat: boolean; openUntil: number };
 type Crate = Rect;
 type Plate = PlateT;
 type Bat = { x: number; y: number };
-type Mon = { x: number; y: number; state: 'wander' | 'freeze' | 'vanish' | 'gone' | 'hunt' | 'search'; t: number; tx: number; ty: number; a: number; dir: number; anim: number; sawHide: boolean; next: number; det: number; detT: number; stuck: number; vx: number; vy: number; sv: number; d8: number; pd: number; db: number; path: { x: number; y: number }[] | null; pi: number; ptx: number; pty: number; rp: number };
+type Mon = { x: number; y: number; state: 'wander' | 'freeze' | 'vanish' | 'gone' | 'hunt' | 'search' | 'warp'; t: number; tx: number; ty: number; a: number; dir: number; anim: number; sawHide: boolean; next: number; det: number; detT: number; stuck: number; vx: number; vy: number; sv: number; d8: number; pd: number; db: number; path: { x: number; y: number }[] | null; pi: number; ptx: number; pty: number; rp: number; wt: number; wcd: number };
 interface G {
   walls: Rect[]; decals: Decal[]; obs: Obs[]; chests: Chest[]; crates: Crate[]; plates: Plate[]; bats: Bat[];
   p: { x: number; y: number; hidden: Crate | null; face: number; aim: number; dir: 'up' | 'down' | 'left' | 'right' };
@@ -79,7 +79,7 @@ function build(): G {
   cand.slice(0, 7).forEach(c => (c.bat = true));
   return {
     walls, decals, obs, chests, crates, plates, bats: [], p: { x: 880, y: 1000, hidden: null, face: 0, aim: Math.PI / 2, dir: 'down' },
-    m: { x: rnd(3400, 4600), y: rnd(200, 1800), state: 'wander', t: 0, tx: WW / 2, ty: WH / 2, a: 1, dir: 1, anim: 0, sawHide: false, next: rnd(6, 10), det: 0, detT: 0, stuck: 0, vx: 0, vy: 0, sv: 0, d8: 2, pd: 2, db: 1, path: null, pi: 0, ptx: -1, pty: -1, rp: 0 },
+    m: { x: rnd(3400, 4600), y: rnd(200, 1800), state: 'wander', t: 0, tx: WW / 2, ty: WH / 2, a: 1, dir: 1, anim: 0, sawHide: false, next: rnd(6, 10), det: 0, detT: 0, stuck: 0, vx: 0, vy: 0, sv: 0, d8: 2, pd: 2, db: 1, path: null, pi: 0, ptx: -1, pty: -1, rp: 0, wt: 0, wcd: 0 },
     battery: 100, keys: 0, time: 0, toast: '', toastT: 0, stepT: 0, batT: 6, dead: '', hbT: 0, gT: 0, shock: false, deadT: 0, noiseFx: [], near: false, rT: 0,
   };
 }
@@ -339,7 +339,29 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
       const light = 70 + 230 * (g.battery / 100);
       const sees = !p.hidden && d < Math.min(340, light + 80) && los(m.x, m.y, p.x, p.y);
       if ((m.state === 'wander' || m.state === 'search') && sees) { m.state = 'hunt'; m.tx = p.x; m.ty = p.y; m.t = 0; beep(70, 0.4, 'sawtooth', 0.08); beep(1400, 0.3, 'sawtooth', 0.04); }
-      if (m.state === 'wander') {
+      // room-warp: if the target is in another room and you can't see the monster, it fades out and reappears in the target's room, outside your visible radius and out of your line of sight
+      const roomOf = (x: number, y: number) => (y > 2100 ? 3 : x < 1680 ? 0 : x < 3280 ? 1 : 2);
+      const RB: [number, number, number, number][] = [[130, 140, 1630, 2050], [1730, 140, 3230, 2050], [3330, 140, 4670, 2050], [110, 2170, 4690, 3140]];
+      const vis = light + 80;
+      m.wcd -= dt;
+      if (m.state === 'hunt' && roomOf(m.x, m.y) !== roomOf(m.tx, m.ty) && d > vis && m.wcd <= 0) m.wt += dt;
+      else if (m.state !== 'warp') m.wt = 0;
+      if (m.wt > 1.2) { m.state = 'warp'; m.t = 0; m.wt = 0; }
+      if (m.state === 'warp') {
+        m.a = Math.max(0, 1 - m.t / 0.8);
+        if (d < vis) { m.state = 'hunt'; m.t = 0; m.wcd = 5; } // you got close while it faded: it stays and keeps hunting
+        else if (m.t > 0.8) {
+          const [bx, by, bx2, by2] = RB[roomOf(m.tx, m.ty)]; let ok = false;
+          for (let i = 0; i < 90 && !ok; i++) {
+            const x = rnd(bx, bx2), y = rnd(by, by2);
+            if (blocked(x, y) || !freeAt(x, y)) continue;
+            if (Math.hypot(x - p.x, y - p.y) < vis + 120 || Math.hypot(x - m.tx, y - m.ty) < 250) continue; // never inside your visible radius
+            if (i < 60 && los(x, y, p.x, p.y)) continue; // prefer spots hidden from you by walls/crates
+            m.x = x; m.y = y; ok = true;
+          }
+          m.state = 'hunt'; m.t = 0; m.wcd = ok ? 8 : 3; m.path = null; m.vx = 0; m.vy = 0; m.a = 0;
+        }
+      } else if (m.state === 'wander') {
         m.a = Math.min(1, m.a + dt * 2);
         if (go(m.tx, m.ty, 75) < 30 || m.t > 9 || m.stuck > 1.5) pick();
         m.next -= dt; if (m.next <= 0) { m.state = 'freeze'; m.t = 0; }
