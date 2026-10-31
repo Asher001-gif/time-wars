@@ -1,4 +1,5 @@
 import ghostFront from '@/assets/warehouse/ghost-front-sheet.png';
+import ghostBack from '@/assets/warehouse/ghost-back-sheet.png';
 import ghost from '@/assets/warehouse/ghost-sheet.png';
 import chestOpen from '@/assets/warehouse/chest-open.png';
 import chestClosed from '@/assets/warehouse/chest-closed.png';
@@ -22,7 +23,7 @@ import helpImg from '@/assets/warehouse/help.png';
 import runImg from '@/assets/warehouse/run.png';
 import battery from '@/assets/warehouse/battery.png';
 
-const urls = { ghost, ghostFront, chestOpen, chestClosed, cWide, cTall, cSmall, crateX, bStripe, bPlain, battery, robotFront, robotBack, crack, bed: bedImg, chair: chairImg, table: tableImg, candle: candleImg, skull: skullImg, teddy: teddyImg, plant: plantImg, help: helpImg, run: runImg };
+const urls = { ghost, ghostFront, ghostBack, chestOpen, chestClosed, cWide, cTall, cSmall, crateX, bStripe, bPlain, battery, robotFront, robotBack, crack, bed: bedImg, chair: chairImg, table: tableImg, candle: candleImg, skull: skullImg, teddy: teddyImg, plant: plantImg, help: helpImg, run: runImg };
 export type WhKey = keyof typeof urls;
 export type WhImages = Record<WhKey, HTMLImageElement>;
 const imgs = {} as WhImages;

@@ -13,7 +13,7 @@ type Chest = Rect & { key: boolean; bat: boolean; openUntil: number };
 type Crate = Rect;
 type Plate = { x: number; y: number; cd: number };
 type Bat = { x: number; y: number };
-type Mon = { x: number; y: number; state: 'wander' | 'freeze' | 'vanish' | 'gone' | 'hunt' | 'search'; t: number; tx: number; ty: number; a: number; dir: number; anim: number; sawHide: boolean; next: number; det: number; detT: number; stuck: number; vert: boolean };
+type Mon = { x: number; y: number; state: 'wander' | 'freeze' | 'vanish' | 'gone' | 'hunt' | 'search'; t: number; tx: number; ty: number; a: number; dir: number; anim: number; sawHide: boolean; next: number; det: number; detT: number; stuck: number; vert: boolean; up: boolean; vx: number; vy: number; sv: number; vb: number; ub: number };
 interface G {
   walls: Rect[]; decals: Decal[]; obs: Obs[]; chests: Chest[]; crates: Crate[]; plates: Plate[]; bats: Bat[];
   p: { x: number; y: number; hidden: Crate | null; face: number; aim: number; dir: 'up' | 'down' | 'left' | 'right' };
@@ -82,7 +82,7 @@ function build(): G {
   for (let i = 0; i < 18; i++) { const r = place(46, 46); if (r) plates.push({ x: r.x + 23, y: r.y + 23, cd: 0 }); }
   return {
     walls, decals, obs, chests, crates, plates, bats: [], p: { x: 880, y: 1000, hidden: null, face: 0, aim: Math.PI / 2, dir: 'down' },
-    m: { x: rnd(3400, 4600), y: rnd(200, 1800), state: 'wander', t: 0, tx: WW / 2, ty: WH / 2, a: 1, dir: 1, anim: 0, sawHide: false, next: rnd(6, 10), det: 0, detT: 0, stuck: 0, vert: false },
+    m: { x: rnd(3400, 4600), y: rnd(200, 1800), state: 'wander', t: 0, tx: WW / 2, ty: WH / 2, a: 1, dir: 1, anim: 0, sawHide: false, next: rnd(6, 10), det: 0, detT: 0, stuck: 0, vert: false, up: false, vx: 0, vy: 0, sv: 0, vb: 0, ub: 0 },
     battery: 100, keys: 0, time: 0, toast: '', toastT: 0, stepT: 0, batT: 6, dead: '', hbT: 0, gT: 0, shock: false, deadT: 0, noiseFx: [],
   };
 }
@@ -239,9 +239,17 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
         const moved = Math.hypot(m.x - ox, m.y - oy);
         if (moved < step * 0.4 && l > 40) { m.stuck += dt; if (m.detT <= 0) { m.det = (Math.random() < 0.5 ? 1 : -1) * rnd(1.0, 1.9); m.detT = 0.6; } }
         else m.stuck = Math.max(0, m.stuck - dt);
-        if (moved > 0.05) m.vert = Math.abs(m.y - oy) > Math.abs(m.x - ox);
-        if (Math.abs(m.x - ox) > 0.05) m.dir = m.x - ox > 0 ? 1 : -1;
-        m.anim += moved / 38;
+        // smoothed velocity -> stable facing (no flicker when the path wiggles)
+        const k = 1 - Math.exp(-dt * 7);
+        m.vx += ((m.x - ox) / dt - m.vx) * k; m.vy += ((m.y - oy) / dt - m.vy) * k;
+        const ax = Math.abs(m.vx), ay = Math.abs(m.vy);
+        if (ax + ay > 8) {
+          m.vert = m.vert ? ay > ax * 0.8 : ay > ax * 1.25; // hysteresis between side view and front/back view
+          if (Math.abs(m.vy) > 6) m.up = m.vy < 0;        // going up -> back view, going down -> front view
+          if (ax > 6) m.dir = m.vx > 0 ? 1 : -1;
+        }
+        m.sv += (moved / dt - m.sv) * (1 - Math.exp(-dt * 8)); // smoothed speed drives the walk cycle
+        m.anim += (m.sv * dt) / 38;
         return l;
       };
       const pick = () => { for (let i = 0; i < 20; i++) { const tx = rnd(100, WW - 100), ty = rnd(120, WH - 100); if (!blocked(tx, ty)) { m.tx = tx; m.ty = ty; break; } } m.stuck = 0; m.t = 0; };
@@ -284,6 +292,8 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
         }
       }
       if (!p.hidden && m.a > 0.5 && d < 44) die('The monster got you.', true);
+      // ease the side <-> front/back crossfade and the up/down flip so sprites never pop
+      m.vb += ((m.vert ? 1 : 0) - m.vb) * (1 - Math.exp(-dt * 9)); m.ub += ((m.up ? 1 : 0) - m.ub) * (1 - Math.exp(-dt * 12));
       g.noiseFx.forEach(n => (n.t -= dt)); g.noiseFx = g.noiseFx.filter(n => n.t > 0);
     };
 
@@ -317,13 +327,23 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
         if (!p.hidden) list.push({ y: p.y + 14, f: () => drawBot(ctx, imgs!, p.x, p.y, p.dir, g.time) });
         list.push({ y: m.y, f: () => {
           if (m.a <= 0.01) return;
-          const fr = m.state === 'freeze' || m.state === 'vanish' ? 0 : Math.floor(m.anim) % 6;
-          ctx.globalAlpha = m.a;
-          if (m.vert) { // moving up/down: front-facing crawl sheet (3 cols x 2 rows)
+          const still = m.state === 'freeze' || m.state === 'vanish';
+          const ph = still ? 0 : m.anim, f0 = Math.floor(ph) % 6, f1 = (f0 + 1) % 6, ft = still ? 0 : ph - Math.floor(ph);
+          const bob = still ? 0 : Math.abs(Math.sin(ph * Math.PI)) * 3;
+          const drawVert = (im: HTMLImageElement, a: number) => {
             const cw = 286, ch = 243, sc = 0.65;
-            ctx.drawImage(imgs!.ghostFront, (fr % 3) * cw, Math.floor(fr / 3) * ch, cw, ch, m.x - cw * sc / 2, m.y - ch * sc, cw * sc, ch * sc);
-          } else
-          ctx.drawImage(imgs!.ghost, fr * FW, (m.dir > 0 ? 0 : 1) * FH, FW, FH, m.x - FW * GS / 2, m.y - FH * GS, FW * GS, FH * GS);
+            for (const [fr, al] of [[f0, 1], [f1, ft]] as [number, number][]) {
+              if (al <= 0.01) continue; ctx.globalAlpha = m.a * a * al;
+              ctx.drawImage(im, (fr % 3) * cw, Math.floor(fr / 3) * ch, cw, ch, m.x - cw * sc / 2, m.y - ch * sc - bob, cw * sc, ch * sc);
+            }
+          };
+          if (m.vb < 0.99) {
+            for (const [fr, al] of [[f0, 1], [f1, ft]] as [number, number][]) {
+              if (al <= 0.01) continue; ctx.globalAlpha = m.a * (1 - m.vb) * al;
+              ctx.drawImage(imgs!.ghost, fr * FW, (m.dir > 0 ? 0 : 1) * FH, FW, FH, m.x - FW * GS / 2, m.y - FH * GS - bob, FW * GS, FH * GS);
+            }
+          }
+          if (m.vb > 0.01) { drawVert(imgs!.ghostFront, m.vb * (1 - m.ub)); drawVert(imgs!.ghostBack, m.vb * m.ub); }
           ctx.globalAlpha = 1;
         } });
       }
@@ -331,7 +351,7 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
       for (const n of g.noiseFx) { ctx.strokeStyle = `rgba(255,255,255,${n.t})`; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(n.x, n.y, (0.6 - n.t) * 500, 0, 6.28); ctx.stroke(); }
       // darkness + flashlight
       dctx.setTransform(1, 0, 0, 1, 0, 0); dctx.globalCompositeOperation = 'source-over'; dctx.clearRect(0, 0, W, H);
-      dctx.fillStyle = `rgba(0,0,0,${0.8 + 0.12 * (1 - g.battery / 100)})`; dctx.fillRect(0, 0, W, H); // dim ambient: everything stays faintly visible
+      dctx.fillStyle = `rgba(0,0,0,${0.9 + 0.08 * (1 - g.battery / 100)})`; dctx.fillRect(0, 0, W, H); // dim ambient: only a faint glimmer outside the spotlight
       const dm = Math.hypot(m.x - p.x, m.y - p.y);
       let rad = (60 + 240 * (g.battery / 100)) * z; let inten = 1;
       if (g.battery < 20) inten *= 0.75 + 0.25 * Math.sin(g.time * 30);
@@ -348,7 +368,7 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
         dctx.closePath(); dctx.fill();
       };
       const L = rad * 1.7;
-      cut(8, L * 0.9, 0.45, 0.3, 0.7);            // wide dim cone
+      cut(8, L * 0.9, 0.34, 0.2, 0.7);            // wide dim cone
       cut(8, L, 0.9, 0.7, 0.36);                  // bright spotlight in the facing direction
       ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.drawImage(dark, 0, 0);
       // HUD
