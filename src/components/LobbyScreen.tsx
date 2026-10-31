@@ -2,17 +2,10 @@ import { toast } from 'sonner';
 
 interface Props {
   onEnter: () => void;
+  onTutorial: () => void;
 }
 
-// newest -> oldest
-const RELEASES = [
-  { date: '31 October 2026', text: 'Warehouse game! Happy Halloween 🎃' },
-  { date: '20 October 2026', text: 'Volleyball game' },
-  { date: '15 May 2026', text: 'Football game' },
-  { date: '10 April 2026', text: 'First game' },
-];
-
-export default function LobbyScreen({ onEnter }: Props) {
+export default function LobbyScreen({ onEnter, onTutorial }: Props) {
   return (
     <div className="fixed inset-0 z-40 flex flex-col items-center justify-center bg-background overflow-hidden">
       {/* Star field */}
@@ -31,6 +24,16 @@ export default function LobbyScreen({ onEnter }: Props) {
           />
         ))}
       </div>
+
+      {/* Top-left ? tutorial button */}
+      <button
+        onClick={onTutorial}
+        aria-label="Tutorial"
+        title="Tutorial"
+        className="absolute top-4 left-4 z-10 w-14 h-14 rounded-xl border-2 border-blue-400 text-blue-300 font-mono font-bold text-2xl bg-blue-950/30 hover:bg-blue-900/50 transition-colors shadow-[0_0_18px_rgba(59,130,246,0.5)]"
+      >
+        ?
+      </button>
 
       {/* Title */}
       <div className="relative text-center px-4">
@@ -58,14 +61,6 @@ export default function LobbyScreen({ onEnter }: Props) {
         >
           ADD FRIENDS
         </button>
-        <div className="mt-2 w-full max-h-[28vh] overflow-y-auto space-y-2 pr-1">
-          {RELEASES.map(r => (
-            <div key={r.date} className="rounded-xl bg-[#2b2e38] border border-white/10 px-4 py-2.5 font-mono shadow-lg shadow-black/30">
-              <div className="text-[11px] text-orange-400 tracking-wider">{r.date}</div>
-              <div className="text-sm text-white font-semibold">{r.text}</div>
-            </div>
-          ))}
-        </div>
       </div>
     </div>
   );
