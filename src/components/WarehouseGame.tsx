@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import crackUrl from '@/assets/warehouse/crack.png';
 import DraggableExitButton from './DraggableExitButton';
 import { loadWarehouseAssets, WhImages } from '@/game/warehouseAssets';
 
@@ -16,7 +17,7 @@ interface G {
   obs: Obs[]; chests: Chest[]; crates: Crate[]; plates: Plate[]; bats: Bat[];
   p: { x: number; y: number; hidden: Crate | null; face: number; dir: 'up' | 'down' | 'left' | 'right' };
   m: Mon; battery: number; keys: number; time: number; toast: string; toastT: number;
-  stepT: number; batT: number; dead: string; noiseFx: { x: number; y: number; t: number }[];
+  stepT: number; batT: number; dead: string; shock: boolean; deadT: number; noiseFx: { x: number; y: number; t: number }[];
 }
 type Best = { time: number; score: number };
 const readBest = (): Best => { try { return JSON.parse(localStorage.getItem(KEY) || '') as Best; } catch { return { time: 0, score: 0 }; } };
@@ -56,7 +57,7 @@ function build(): G {
   return {
     obs, chests, crates, plates, bats: [], p: { x: WW / 2, y: WH / 2, hidden: null, face: 0, dir: 'down' },
     m: { x: rnd(200, WW - 200), y: rnd(200, 500), state: 'wander', t: 0, tx: WW / 2, ty: WH / 2, a: 1, dir: 1, anim: 0, sawHide: false, next: rnd(6, 10), det: 0, detT: 0, stuck: 0 },
-    battery: 100, keys: 0, time: 0, toast: '', toastT: 0, stepT: 0, batT: 0, dead: '', noiseFx: [],
+    battery: 100, keys: 0, time: 0, toast: '', toastT: 0, stepT: 0, batT: 0, dead: '', shock: false, deadT: 0, noiseFx: [],
   };
 }
 
@@ -65,7 +66,7 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
   const gref = useRef<G | null>(null);
   const [phase, setPhase] = useState<'menu' | 'play' | 'dead'>('menu');
   const [best, setBest] = useState<Best>(readBest);
-  const [res, setRes] = useState<{ time: number; score: number; keys: number; why: string; nb: boolean } | null>(null);
+  const [res, setRes] = useState<{ time: number; score: number; keys: number; why: string; nb: boolean; nbTime: boolean; ghost: boolean } | null>(null);
   const keys = useRef<Record<string, boolean>>({});
   const act = useRef(false);
   const joy = useRef({ x: 0, y: 0, id: -1, ox: 0, oy: 0 });
@@ -122,13 +123,13 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
         }
       }
     };
-    const die = (why: string) => {
-      if (g.dead) return; g.dead = why; beep(80, 0.8, 'sawtooth', 0.12);
-      const s = scoreOf(g); const b = readBest(); const nb = s > b.score;
+    const die = (why: string, ghost = false) => {
+      if (g.dead) return; g.dead = why; g.shock = ghost; beep(80, 0.8, 'sawtooth', 0.12);
+      const s = scoreOf(g); const b = readBest(); const nb = s > b.score, nbTime = g.time > b.time;
       const nbest = { time: Math.max(b.time, g.time), score: Math.max(b.score, s) };
       try { localStorage.setItem(KEY, JSON.stringify(nbest)); } catch { /* ignore */ }
-      setBest(nbest); setRes({ time: g.time, score: s, keys: g.keys, why, nb });
-      setTimeout(() => alive && setPhase('dead'), 900);
+      setBest(nbest); setRes({ time: g.time, score: s, keys: g.keys, why, nb, nbTime, ghost });
+      setTimeout(() => alive && setPhase('dead'), ghost ? 1800 : 900);
     };
     const nearest = <T extends Rect>(arr: T[], r: number): T | null => {
       let b: T | null = null, bd = r;
@@ -242,14 +243,14 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
         m.a = Math.min(1, m.a + dt * 3);
         if (sees) { m.tx = p.x; m.ty = p.y; m.t = 0; }
         if (go(m.tx, m.ty, spd) < 34) {
-          if (p.hidden && m.sawHide) { die('It saw you hide.'); return; }
+          if (p.hidden && m.sawHide) { die('It saw you hide.', true); return; }
           m.state = 'search'; m.t = 0; m.sawHide = false;
         } else if (m.t > 14 || m.stuck > 2.5) { m.state = 'search'; m.t = 0; m.stuck = 0; }
       } else if (m.state === 'search') {
         m.a = 1; if (m.t % 2 < dt) { m.tx = m.x + rnd(-200, 200); m.ty = m.y + rnd(-200, 200); }
         go(m.tx, m.ty, 70); if (m.t > 6) { m.state = 'wander'; m.t = 0; m.next = rnd(6, 10); pick(); }
       }
-      if (!p.hidden && m.a > 0.5 && d < 44) die('The monster got you.');
+      if (!p.hidden && m.a > 0.5 && d < 44) die('The monster got you.', true);
       g.noiseFx.forEach(n => (n.t -= dt)); g.noiseFx = g.noiseFx.filter(n => n.t > 0);
     };
 
@@ -298,6 +299,7 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
       if (g.battery < 20) inten *= 0.75 + 0.25 * Math.sin(g.time * 30);
       if (m.a > 0.2 && dm < 600 && Math.random() < (1 - dm / 600) * 0.7) { inten = 0.12; rad *= 0.8; }
       if (p.hidden) rad *= 0.45;
+      if (g.shock) { rad = Math.max(rad, 260 * z) * (1 + Math.min(1, g.deadT) * 0.4); inten = 1; }
       const sx = W / 2 + (p.x - cx) * z, sy = H / 2 + (p.y - cy) * z;
       const gr = dctx.createRadialGradient(sx, sy, rad * 0.1, sx, sy, rad);
       gr.addColorStop(0, `rgba(0,0,0,${inten})`); gr.addColorStop(0.55, `rgba(0,0,0,${0.8 * inten})`); gr.addColorStop(1, 'rgba(0,0,0,0)');
@@ -320,12 +322,21 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
       }
       if (prompt) { ctx.font = 'bold 16px monospace'; ctx.fillStyle = '#fff'; ctx.fillText(prompt, W / 2, H / 2 + 60); }
       ctx.font = '11px monospace'; ctx.fillStyle = '#888'; ctx.fillText('You can hide inside X crates!', W / 2, H - 10);
+      if (g.shock && imgs) {
+        const t = g.deadT;
+        if (t < 1.2) { const k = (1.2 - t) * 18; ctx.drawImage(canvas, (Math.random() - 0.5) * k, (Math.random() - 0.5) * k); }
+        const cs = Math.min(1.15, 0.7 + t * 1.2) * Math.max(W, H) * 0.9;
+        ctx.globalAlpha = Math.min(1, t * 6); ctx.drawImage(imgs.crack, W / 2 - cs / 2, H / 2 - cs / 2, cs, cs); ctx.globalAlpha = 1;
+        if (t < 0.35) { ctx.fillStyle = `rgba(255,255,255,${0.9 * (1 - t / 0.35)})`; ctx.fillRect(0, 0, W, H); }
+        ctx.fillStyle = `rgba(120,0,0,${Math.min(0.35, t * 0.3)})`; ctx.fillRect(0, 0, W, H);
+      }
       if (touch && joy.current.id >= 0) { ctx.strokeStyle = 'rgba(255,255,255,.4)'; ctx.beginPath(); ctx.arc(joy.current.ox, joy.current.oy, 50, 0, 6.28); ctx.stroke(); ctx.beginPath(); ctx.arc(joy.current.ox + joy.current.x * 50, joy.current.oy + joy.current.y * 50, 22, 0, 6.28); ctx.fillStyle = 'rgba(255,255,255,.3)'; ctx.fill(); }
     };
 
     const loop = (t: number) => {
       if (!alive) return;
       const dt = Math.min(0.05, (t - last) / 1000); last = t;
+      if (g.dead) g.deadT += dt;
       if (imgs) update(dt); draw(); raf = requestAnimationFrame(loop);
     };
     raf = requestAnimationFrame(loop);
@@ -352,12 +363,13 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
       )}
       {phase !== 'play' && (
         <div className="absolute inset-0 z-10 bg-black/90 flex flex-col items-center justify-center text-center text-neutral-200 p-6 gap-4">
-          <h1 className="text-4xl sm:text-5xl font-bold tracking-[0.3em] text-white">{phase === 'dead' ? 'YOU DIED' : 'THE WAREHOUSE'}</h1>
+          {phase === 'dead' && res?.ghost && <img src={crackUrl} alt="" className="absolute inset-0 m-auto w-full h-full object-contain opacity-30 pointer-events-none" />}
+          <h1 className="relative text-4xl sm:text-5xl font-bold tracking-[0.3em] text-white">{phase === 'dead' ? 'YOU DIED' : 'THE WAREHOUSE'}</h1>
           {phase === 'dead' && res ? (
             <div className="space-y-1">
               <p className="text-neutral-400">{res.why}</p>
-              <p>Survived {fmt(res.time)} · {res.keys} keys · Score {res.score}</p>
-              {res.nb && <p className="text-white font-bold">NEW BEST SCORE!</p>}
+              <p className="text-lg">This run: <b>{fmt(res.time)}</b> · {res.keys} keys · Score <b>{res.score}</b></p>
+              {(res.nb || res.nbTime) && <p className="text-white font-bold animate-pulse">NEW BEST {res.nb && res.nbTime ? 'SCORE & TIME' : res.nb ? 'SCORE' : 'TIME'}!</p>}
             </div>
           ) : (
             <div className="max-w-md text-sm text-neutral-400 space-y-1">
@@ -366,7 +378,7 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
               <p>Hide in X crates. If the monster sees you enter, you're dead. Hidden pressure plates are loud.</p>
             </div>
           )}
-          <p className="text-neutral-500 text-sm">Best: {fmt(best.time)} · Score {best.score}</p>
+          <p className="text-neutral-400 text-sm">Best time: {fmt(best.time)} · Best score: {best.score}</p>
           <button onClick={() => { setRes(null); setPhase('play'); }} className="px-8 py-3 border border-white text-white tracking-widest hover:bg-white hover:text-black transition">{phase === 'dead' ? 'TRY AGAIN' : 'ENTER'}</button>
         </div>
       )}
