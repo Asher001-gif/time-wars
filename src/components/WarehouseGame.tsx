@@ -10,7 +10,7 @@ type Chest = Rect & { key: boolean; bat: boolean; openUntil: number };
 type Crate = Rect;
 type Plate = PlateT;
 type Bat = { x: number; y: number };
-type Mon = { x: number; y: number; state: 'wander' | 'freeze' | 'vanish' | 'gone' | 'hunt' | 'search'; t: number; tx: number; ty: number; a: number; dir: number; anim: number; sawHide: boolean; next: number; det: number; detT: number; stuck: number; vx: number; vy: number; sv: number; d8: number; pd: number; db: number };
+type Mon = { x: number; y: number; state: 'wander' | 'freeze' | 'vanish' | 'gone' | 'hunt' | 'search'; t: number; tx: number; ty: number; a: number; dir: number; anim: number; sawHide: boolean; next: number; det: number; detT: number; stuck: number; vx: number; vy: number; sv: number; d8: number; pd: number; db: number; path: { x: number; y: number }[] | null; pi: number; ptx: number; pty: number; rp: number };
 interface G {
   walls: Rect[]; decals: Decal[]; obs: Obs[]; chests: Chest[]; crates: Crate[]; plates: Plate[]; bats: Bat[];
   p: { x: number; y: number; hidden: Crate | null; face: number; aim: number; dir: 'up' | 'down' | 'left' | 'right' };
@@ -79,7 +79,7 @@ function build(): G {
   cand.slice(0, 7).forEach(c => (c.bat = true));
   return {
     walls, decals, obs, chests, crates, plates, bats: [], p: { x: 880, y: 1000, hidden: null, face: 0, aim: Math.PI / 2, dir: 'down' },
-    m: { x: rnd(3400, 4600), y: rnd(200, 1800), state: 'wander', t: 0, tx: WW / 2, ty: WH / 2, a: 1, dir: 1, anim: 0, sawHide: false, next: rnd(6, 10), det: 0, detT: 0, stuck: 0, vx: 0, vy: 0, sv: 0, d8: 2, pd: 2, db: 1 },
+    m: { x: rnd(3400, 4600), y: rnd(200, 1800), state: 'wander', t: 0, tx: WW / 2, ty: WH / 2, a: 1, dir: 1, anim: 0, sawHide: false, next: rnd(6, 10), det: 0, detT: 0, stuck: 0, vx: 0, vy: 0, sv: 0, d8: 2, pd: 2, db: 1, path: null, pi: 0, ptx: -1, pty: -1, rp: 0 },
     battery: 100, keys: 0, time: 0, toast: '', toastT: 0, stepT: 0, batT: 6, dead: '', hbT: 0, gT: 0, shock: false, deadT: 0, noiseFx: [], near: false, rT: 0,
   };
 }
@@ -136,6 +136,73 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
       for (let i = 1; i < n; i++) { const x = ax + (bx - ax) * i / n, y = ay + (by - ay) * i / n; if (SS.some(o => x > o.x && x < o.x + o.w && y > o.y && y < o.y + o.h)) return false; }
       return true;
     };
+    // ---------- A* pathfinding for the monster ----------
+    // grid of cells where the monster's body would hit something (sampled at 5 points per cell = safety margin)
+    const CS = 40, GW = Math.ceil(WW / CS), GH = Math.ceil(WH / CS);
+    const grid = new Uint8Array(GW * GH);
+    for (let cy = 0; cy < GH; cy++) for (let cx = 0; cx < GW; cx++) {
+      const x = cx * CS + CS / 2, y = cy * CS + CS / 2;
+      const out = x < 50 || x > WW - 50 || y < 110 || y > WH - 20;
+      grid[cy * GW + cx] = out || blocked(x, y) || blocked(x - 12, y - 12) || blocked(x + 12, y - 12) || blocked(x - 12, y + 12) || blocked(x + 12, y + 12) ? 1 : 0;
+    }
+    const cellOf = (x: number, y: number) => Math.max(0, Math.min(GW - 1, Math.floor(x / CS))) + Math.max(0, Math.min(GH - 1, Math.floor(y / CS))) * GW;
+    const freeAt = (x: number, y: number) => x >= 0 && y >= 0 && x < WW && y < WH && grid[cellOf(x, y)] === 0;
+    const segClear = (ax: number, ay: number, bx: number, by: number) => {
+      const n = Math.ceil(Math.hypot(bx - ax, by - ay) / 10);
+      for (let i = 0; i <= n; i++) if (!freeAt(ax + (bx - ax) * i / n, ay + (by - ay) * i / n)) return false;
+      return true;
+    };
+    // nearest free cell to a point (ring search)
+    const snap = (x: number, y: number): number => {
+      const c = cellOf(x, y); if (!grid[c]) return c;
+      const cx0 = c % GW, cy0 = Math.floor(c / GW);
+      for (let r = 1; r < 14; r++) {
+        let best = -1, bd = 1e9;
+        for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+          if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+          const nx = cx0 + dx, ny = cy0 + dy; if (nx < 0 || ny < 0 || nx >= GW || ny >= GH || grid[ny * GW + nx]) continue;
+          const d = Math.hypot(nx * CS + CS / 2 - x, ny * CS + CS / 2 - y); if (d < bd) { bd = d; best = ny * GW + nx; }
+        }
+        if (best >= 0) return best;
+      }
+      return -1;
+    };
+    const gS = new Float32Array(GW * GH), parent = new Int32Array(GW * GH), seen = new Uint32Array(GW * GH), closed = new Uint32Array(GW * GH);
+    let stamp = 0;
+    const findPath = (sx: number, sy: number, tx: number, ty: number): { x: number; y: number }[] | null => {
+      if (segClear(sx, sy, tx, ty)) return [{ x: tx, y: ty }]; // straight shot
+      const s = snap(sx, sy), t = snap(tx, ty); if (s < 0 || t < 0) return null;
+      stamp++;
+      const heap: number[] = [], fv: number[] = [];
+      const push = (n: number, f: number) => { let i = heap.length; heap.push(n); fv.push(f); while (i > 0) { const pp = (i - 1) >> 1; if (fv[pp] <= fv[i]) break; [heap[pp], heap[i]] = [heap[i], heap[pp]]; [fv[pp], fv[i]] = [fv[i], fv[pp]]; i = pp; } };
+      const pop = () => { const top = heap[0], ln = heap.pop()!, lf = fv.pop()!; if (heap.length) { heap[0] = ln; fv[0] = lf; let i = 0; for (;;) { const l = 2 * i + 1, r = l + 1; let m = i; if (l < heap.length && fv[l] < fv[m]) m = l; if (r < heap.length && fv[r] < fv[m]) m = r; if (m === i) break; [heap[m], heap[i]] = [heap[i], heap[m]]; [fv[m], fv[i]] = [fv[i], fv[m]]; i = m; } } return top; };
+      const tcx = t % GW, tcy = Math.floor(t / GW);
+      const hF = (n: number) => { const dx = Math.abs((n % GW) - tcx), dy = Math.abs(Math.floor(n / GW) - tcy); return (dx + dy) + (1.4142 - 2) * Math.min(dx, dy); };
+      seen[s] = stamp; gS[s] = 0; parent[s] = -1; push(s, hF(s));
+      let found = false;
+      while (heap.length) {
+        const n = pop(); if (closed[n] === stamp) continue; closed[n] = stamp;
+        if (n === t) { found = true; break; }
+        const cx = n % GW, cy = Math.floor(n / GW);
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+          if (!dx && !dy) continue;
+          const nx = cx + dx, ny = cy + dy; if (nx < 0 || ny < 0 || nx >= GW || ny >= GH) continue;
+          const nn = ny * GW + nx; if (grid[nn]) continue;
+          if (dx && dy && (grid[cy * GW + nx] || grid[ny * GW + cx])) continue; // no cutting corners
+          const ng = gS[n] + (dx && dy ? 1.4142 : 1);
+          if (seen[nn] !== stamp || ng < gS[nn]) { seen[nn] = stamp; gS[nn] = ng; parent[nn] = n; push(nn, ng + hF(nn)); }
+        }
+      }
+      if (!found) return null;
+      const pts: { x: number; y: number }[] = [{ x: sx, y: sy }];
+      const rev: number[] = []; for (let n = t; n >= 0 && n !== s; n = parent[n]) rev.push(n);
+      for (let i = rev.length - 1; i >= 0; i--) pts.push({ x: (rev[i] % GW) * CS + CS / 2, y: Math.floor(rev[i] / GW) * CS + CS / 2 });
+      if (freeAt(tx, ty)) pts.push({ x: tx, y: ty });
+      // string-pull: skip every waypoint we can see past, so it walks the shortest straight lines
+      const out: { x: number; y: number }[] = []; let i = 0;
+      while (i < pts.length - 1) { let j = pts.length - 1; while (j > i + 1 && !segClear(pts[i].x, pts[i].y, pts[j].x, pts[j].y)) j--; out.push(pts[j]); i = j; }
+      return out;
+    };
     // start: the monster appears somewhere random, a little way from where you spawn (never on top of you)
     for (let i = 0; i < 300; i++) {
       const ang = Math.random() * 6.2832, r = rnd(650, 1100);
@@ -185,7 +252,10 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
       if (g.battery <= 0) { g.battery = 0; die('Your battery ran out.'); return; }
       if (moving) {
         const sp = run ? 215 : 120; moveP(ix * sp * dt, iy * sp * dt); if (ix) p.face = ix;
-        if (run) { g.stepT -= dt; if (g.stepT <= 0) { g.stepT = 0.5; noise(p.x, p.y, 330); beep(110, 0.05, 'triangle', 0.04); } }
+        g.stepT -= dt; if (g.stepT <= 0) {
+          if (run) { g.stepT = 0.35; noise(p.x, p.y, 520); beep(110, 0.05, 'triangle', 0.04); } // sprint: loud, the monster locks onto you
+          else { g.stepT = 0.6; noise(p.x, p.y, 200); } // fast walk: quieter, but close monsters still hear it
+        }
       }
       // pressure plates
       for (const pl of g.plates) {
@@ -230,9 +300,19 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
       const d = Math.hypot(m.x - p.x, m.y - p.y);
       m.t += dt;
       const go = (tx: number, ty: number, sp: number) => {
-        const dx = tx - m.x, dy = ty - m.y, l = Math.hypot(dx, dy) || 1, step = sp * dt;
-        let ang = Math.atan2(dy, dx);
-        if (m.detT > 0) { m.detT -= dt; ang += m.det; }
+        const l = Math.hypot(tx - m.x, ty - m.y) || 1, step = sp * dt;
+        // plan a collision-free shortest route (A*) and steer along its waypoints
+        m.rp -= dt;
+        if (!m.path || Math.hypot(m.ptx - tx, m.pty - ty) > 50 || m.rp <= 0 || m.stuck > 0.4) {
+          m.path = findPath(m.x, m.y, tx, ty); m.pi = 0; m.ptx = tx; m.pty = ty; m.rp = 0.6; if (m.stuck > 0.4) m.stuck = 0.2;
+        }
+        let wx = tx, wy = ty;
+        if (m.path) {
+          while (m.pi < m.path.length - 1 && Math.hypot(m.path[m.pi].x - m.x, m.path[m.pi].y - m.y) < 26) m.pi++;
+          const wp = m.path[Math.min(m.pi, m.path.length - 1)]; wx = wp.x; wy = wp.y;
+        }
+        let ang = Math.atan2(wy - m.y, wx - m.x);
+        if (!m.path && m.detT > 0) { m.detT -= dt; ang += m.det; }
         const ox = m.x, oy = m.y;
         if (blocked(m.x, m.y)) { m.x += Math.cos(ang) * step; m.y += Math.sin(ang) * step; }
         else {
@@ -241,7 +321,7 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
         }
         m.x = Math.max(40, Math.min(WW - 40, m.x)); m.y = Math.max(100, Math.min(WH - 10, m.y));
         const moved = Math.hypot(m.x - ox, m.y - oy);
-        if (moved < step * 0.4 && l > 40) { m.stuck += dt; if (m.detT <= 0) { m.det = (Math.random() < 0.5 ? 1 : -1) * rnd(1.0, 1.9); m.detT = 0.6; } }
+        if (moved < step * 0.4 && l > 40) { m.stuck += dt; if (!m.path && m.detT <= 0) { m.det = (Math.random() < 0.5 ? 1 : -1) * rnd(1.0, 1.9); m.detT = 0.6; } }
         else m.stuck = Math.max(0, m.stuck - dt);
         // smoothed velocity -> stable 8-way facing (with hysteresis so it never flickers between sectors)
         const kv = 1 - Math.exp(-dt * 7);
