@@ -1,5 +1,5 @@
 import { ROOMS, ROOM_WALLS, OBSTACLES, RoomInfo, pointClearance } from './collision';
-import { PLAYER_RADIUS, MAP_WIDTH, MAP_HEIGHT, Door as GameDoor } from './types';
+import { PLAYER_RADIUS, MAP_WIDTH, MARS_MAP_HEIGHT, Door as GameDoor } from './types';
 
 // Door centers for each room
 interface Door {
@@ -100,7 +100,7 @@ function legacyDirection(
  * ===================================================================== */
 const STEP = 10;
 const GW = Math.floor(MAP_WIDTH / STEP) + 1;
-const GH = Math.floor(MAP_HEIGHT / STEP) + 1;
+const GH = Math.floor(MARS_MAP_HEIGHT / STEP) + 1;
 const CLEAR = PLAYER_RADIUS + 1;
 const DOOR_COST = 25;       // extra path cost (cost units = 10px steps) so bots prefer open routes but still go through doors when needed
 const GOAL_SNAP = 4;        // goals are snapped to a 40px lattice so moving targets reuse fields
@@ -115,7 +115,7 @@ function getBase(): Uint8Array {
   for (let j = 0; j < GH; j++) {
     for (let i = 0; i < GW; i++) {
       const x = i * STEP, y = j * STEP;
-      if (x < CLEAR || y < CLEAR || x > MAP_WIDTH - CLEAR || y > MAP_HEIGHT - CLEAR || pointClearance(x, y) < CLEAR) b[j * GW + i] = 1;
+      if (x < CLEAR || y < CLEAR || x > MAP_WIDTH - CLEAR || y > MARS_MAP_HEIGHT - CLEAR || pointClearance(x, y) < CLEAR) b[j * GW + i] = 1;
     }
   }
   baseBlocked = b;

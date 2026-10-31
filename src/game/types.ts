@@ -402,6 +402,8 @@ export const KILL_COOLDOWN = 10000; // traitor cooldown: 10s
 export const FREEZE_COOLDOWN = 10000;
 export const MAP_WIDTH = 2000;
 export const MAP_HEIGHT = 1200;
+/** Mars Mission map is taller than football's: the extra strip holds the OUTPOST complex. */
+export const MARS_MAP_HEIGHT = 2100;
 export const TASK_RANGE = 60;
 export const TOTAL_TASKS = 10;
 

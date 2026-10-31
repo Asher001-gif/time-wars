@@ -99,6 +99,44 @@ export const ROOM_WALLS: Wall[] = [
   { x1: 1963, y1: 157, x2: 1963, y2: 183 },
 ];
 
+
+/* ===== OUTPOST complex (south strip): one large room with 8 small rooms inside ===== */
+type GapSide = 'top' | 'bottom' | 'left' | 'right';
+export interface Gap { side: GapSide; c: number; w: number }
+export interface BoxInfo { label: string; x: number; y: number; w: number; h: number; gaps: Gap[] }
+
+function sideSegs(a: number, b: number, gaps: { c: number; w: number }[]): [number, number][] {
+  const out: [number, number][] = []; let cur = a;
+  for (const g of [...gaps].sort((p, q) => p.c - q.c)) { const g1 = g.c - g.w / 2, g2 = g.c + g.w / 2; if (g1 > cur) out.push([cur, g1]); cur = g2; }
+  if (cur < b) out.push([cur, b]);
+  return out;
+}
+function boxWalls(b: BoxInfo): Wall[] {
+  const w: Wall[] = [];
+  const g = (s: GapSide) => b.gaps.filter(x => x.side === s);
+  for (const [a, c] of sideSegs(b.x, b.x + b.w, g('top'))) w.push({ x1: a, y1: b.y, x2: c, y2: b.y });
+  for (const [a, c] of sideSegs(b.x, b.x + b.w, g('bottom'))) w.push({ x1: a, y1: b.y + b.h, x2: c, y2: b.y + b.h });
+  for (const [a, c] of sideSegs(b.y, b.y + b.h, g('left'))) w.push({ x1: b.x, y1: a, x2: b.x, y2: c });
+  for (const [a, c] of sideSegs(b.y, b.y + b.h, g('right'))) w.push({ x1: b.x + b.w, y1: a, x2: b.x + b.w, y2: c });
+  return w;
+}
+const DG = 90; // small-room doorway width
+export const OUTPOST: BoxInfo = {
+  label: 'OUTPOST', x: 160, y: 1300, w: 1680, h: 720,
+  gaps: [{ side: 'top', c: 620, w: 100 }, { side: 'top', c: 1420, w: 100 }, { side: 'left', c: 1660, w: 110 }, { side: 'right', c: 1660, w: 110 }],
+};
+export const OUTPOST_ROOMS: BoxInfo[] = [
+  { label: 'A1', x: 280,  y: 1380, w: 280, h: 200, gaps: [{ side: 'bottom', c: 420,  w: DG }] },
+  { label: 'A2', x: 680,  y: 1380, w: 280, h: 200, gaps: [{ side: 'left',   c: 1480, w: DG }] },
+  { label: 'A3', x: 1080, y: 1380, w: 280, h: 200, gaps: [{ side: 'right',  c: 1480, w: DG }] },
+  { label: 'A4', x: 1480, y: 1380, w: 280, h: 200, gaps: [{ side: 'bottom', c: 1620, w: DG }] },
+  { label: 'B1', x: 280,  y: 1740, w: 280, h: 200, gaps: [{ side: 'top',    c: 420,  w: DG }] },
+  { label: 'B2', x: 680,  y: 1740, w: 280, h: 200, gaps: [{ side: 'right',  c: 1840, w: DG }] },
+  { label: 'B3', x: 1080, y: 1740, w: 280, h: 200, gaps: [{ side: 'left',   c: 1840, w: DG }] },
+  { label: 'B4', x: 1480, y: 1740, w: 280, h: 200, gaps: [{ side: 'top',    c: 1620, w: DG }] },
+];
+ROOM_WALLS.push(...boxWalls(OUTPOST), ...OUTPOST_ROOMS.flatMap(boxWalls));
+
 /** 2 mini shelter rooms in the east expansion (decor + collision already in ROOM_WALLS). */
 export interface ShelterInfo {
   label: string;

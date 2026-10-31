@@ -1,4 +1,4 @@
-import { TaskChallenge, TaskStation, TaskType, TOTAL_TASKS, MAP_WIDTH, MAP_HEIGHT, TeamIndex, JAIL_RECT } from './types';
+import { TaskChallenge, TaskStation, TaskType, TOTAL_TASKS, MAP_WIDTH, MARS_MAP_HEIGHT, TeamIndex, JAIL_RECT } from './types';
 import { pointClearance } from './collision';
 
 const MIN_CLEAR = 60; // keep tasks well away from walls / rocks / pylons so they're always reachable
@@ -6,7 +6,7 @@ const JAIL_MARGIN = 80;
 
 /** True when (x,y) is not near any wall, obstacle, the jail room, or the map edge. */
 function isSafe(x: number, y: number): boolean {
-  if (x < 80 || y < 80 || x > MAP_WIDTH - 80 || y > MAP_HEIGHT - 80) return false;
+  if (x < 80 || y < 80 || x > MAP_WIDTH - 80 || y > MARS_MAP_HEIGHT - 80) return false;
   if (x > JAIL_RECT.x - JAIL_MARGIN && x < JAIL_RECT.x + JAIL_RECT.w + JAIL_MARGIN &&
       y > JAIL_RECT.y - JAIL_MARGIN && y < JAIL_RECT.y + JAIL_RECT.h + JAIL_MARGIN) return false;
   return pointClearance(x, y) >= MIN_CLEAR;
@@ -48,6 +48,8 @@ export function createTaskStations(count: number = TOTAL_TASKS, team: TeamIndex 
     { x: 1320, y: 550 }, { x: 1450, y: 680 },
     // Open area
     { x: 800, y: 900 }, { x: 500, y: 1050 },
+    // OUTPOST complex (inside the small rooms + central corridor)
+    { x: 420, y: 1480 }, { x: 1220, y: 1480 }, { x: 820, y: 1840 }, { x: 1620, y: 1840 }, { x: 1000, y: 1660 },
   ];
 
   const types: TaskType[] = [
@@ -63,7 +65,7 @@ export function createTaskStations(count: number = TOTAL_TASKS, team: TeamIndex 
     if (!pos) {
       // Repeat a previous task at a random location that is NOT in/near walls or the jail
       for (let tries = 0; tries < 200; tries++) {
-        const c = { x: 150 + Math.random() * (MAP_WIDTH - 300), y: 150 + Math.random() * (MAP_HEIGHT - 300) };
+        const c = { x: 150 + Math.random() * (MAP_WIDTH - 300), y: 150 + Math.random() * (MARS_MAP_HEIGHT - 300) };
         if (isSafe(c.x + dx, c.y)) { pos = c; break; }
       }
       if (!pos) pos = { x: 800, y: 900 };

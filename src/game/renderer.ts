@@ -2,7 +2,7 @@ import { getViewTarget } from './spectate';
 import { GameState, Player, PLAYER_RADIUS, TASK_RANGE, FreezeProjectile, JAIL_RECT, JAIL_DURATION, DOOR_INTERACT_RANGE, TEAM_COLORS, TEAM_NAMES, TeamIndex, Platform, BUILDER_BLOCK_LIFETIME } from './types';
 import { Powerup, POWERUP_RADIUS, Meteor, METEOR_RADIUS, VirusZone } from './types';
 import { stepFx, drawWorldFx, drawScreenFx, shakeOffset } from './juice';
-import { ROOM_WALLS, OBSTACLES, ROOMS, SHELTERS, BILLBOARDS } from './collision';
+import { ROOM_WALLS, OBSTACLES, ROOMS, SHELTERS, BILLBOARDS, OUTPOST, OUTPOST_ROOMS, BoxInfo } from './collision';
 
 import crewA from '@/assets/char-crew-a.png';
 import crewB from '@/assets/char-crew-b.png';
@@ -900,6 +900,7 @@ function drawMarsSurface(ctx: CanvasRenderingContext2D, w: number, h: number) {
   // East expansion: mini shelters + billboards (drawn before walls so the
   // shared wall lines render on top with the same #111 style).
   drawShelters(ctx);
+  drawOutpost(ctx);
   drawBillboards(ctx);
 
 
@@ -998,6 +999,28 @@ function getBillboardImage(src: string): HTMLImageElement | null {
     BILLBOARD_IMG_CACHE.set(src, img);
   }
   return img.complete && img.naturalWidth > 0 ? img : null;
+}
+
+function drawOutpost(ctx: CanvasRenderingContext2D) {
+  const box = (b: BoxInfo, floor: string, line: string, step: number, label: string) => {
+    ctx.fillStyle = floor; ctx.fillRect(b.x, b.y, b.w, b.h);
+    ctx.strokeStyle = line; ctx.lineWidth = 1;
+    for (let gx = b.x + step; gx < b.x + b.w; gx += step) { ctx.beginPath(); ctx.moveTo(gx, b.y); ctx.lineTo(gx, b.y + b.h); ctx.stroke(); }
+    for (let gy = b.y + step; gy < b.y + b.h; gy += step) { ctx.beginPath(); ctx.moveTo(b.x, gy); ctx.lineTo(b.x + b.w, gy); ctx.stroke(); }
+    ctx.fillStyle = 'rgba(255,255,255,0.16)'; ctx.font = 'bold 14px monospace'; ctx.textAlign = 'center';
+    ctx.fillText(label, b.x + b.w / 2, b.y + b.h / 2 + 5);
+  };
+  box(OUTPOST, '#232323', 'rgba(80,80,80,0.28)', 50, '');
+  ctx.fillStyle = 'rgba(255,255,255,0.2)'; ctx.font = 'bold 22px monospace'; ctx.textAlign = 'center';
+  ctx.fillText('OUTPOST', OUTPOST.x + OUTPOST.w / 2, OUTPOST.y + 50);
+  for (const r of OUTPOST_ROOMS) box(r, '#33302c', 'rgba(90,80,70,0.35)', 40, r.label);
+  ctx.fillStyle = '#3dba6f';
+  for (const b of [OUTPOST, ...OUTPOST_ROOMS]) for (const g of b.gaps) {
+    if (g.side === 'top') ctx.fillRect(g.c - g.w / 2, b.y - 3, g.w, 6);
+    else if (g.side === 'bottom') ctx.fillRect(g.c - g.w / 2, b.y + b.h - 3, g.w, 6);
+    else if (g.side === 'left') ctx.fillRect(b.x - 3, g.c - g.w / 2, 6, g.w);
+    else ctx.fillRect(b.x + b.w - 3, g.c - g.w / 2, 6, g.w);
+  }
 }
 
 function drawShelters(ctx: CanvasRenderingContext2D) {

@@ -2,7 +2,7 @@ import {
   Player, GameState, Role,
   PLAYER_RADIUS, KILL_CLOSE_RANGE, SHOOTER_RANGE,
   BULLET_SPEED, BULLET_HIT_RADIUS, FreezeProjectile,
-  KILL_COOLDOWN, MAP_WIDTH, MAP_HEIGHT, TASK_RANGE, TOTAL_TASKS,
+  KILL_COOLDOWN, MAP_WIDTH, MARS_MAP_HEIGHT, TASK_RANGE, TOTAL_TASKS,
   ARREST_RANGE, ARREST_COOLDOWN, JAIL_DURATION, JAIL_RECT, JAIL_RELEASE,
   DOOR_INTERACT_RANGE, DOOR_USE_COOLDOWN,
   GameSettings, DEFAULT_SETTINGS, Ability, TeamIndex,
@@ -144,7 +144,7 @@ export function createGame(settings: GameSettings = DEFAULT_SETTINGS, playerName
   const players: Player[] = slots.map((slot, i) => ({
     id: i,
     x: 200 + Math.random() * (MAP_WIDTH - 400),
-    y: 200 + Math.random() * (MAP_HEIGHT - 400),
+    y: 200 + Math.random() * (MARS_MAP_HEIGHT - 400),
     role: ABILITY_TO_ROLE[slot.ability],
     ability: slot.ability,
     team: slot.team,
@@ -160,7 +160,7 @@ export function createGame(settings: GameSettings = DEFAULT_SETTINGS, playerName
     speed: ABILITY_SPEED[slot.ability] * speedMult,
     direction: { x: 0, y: 0 },
     aiTargetX: MAP_WIDTH / 2,
-    aiTargetY: MAP_HEIGHT / 2,
+    aiTargetY: MARS_MAP_HEIGHT / 2,
     aiChangeTime: 0,
     killCooldown: 0,
     freezeCooldown: 0,
@@ -178,6 +178,14 @@ export function createGame(settings: GameSettings = DEFAULT_SETTINGS, playerName
     enhanced: i !== 0 && enhancedSet.has(i),
     lockedTargetId: null,
   }));
+
+  // Spawn only on free ground (never inside walls / small rooms' walls / rocks)
+  {
+    const sd = createDoors();
+    for (const p of players) {
+      if (!isFreePoint(p.x, p.y, sd)) { const pt = findFreeSpawnPoint(sd); if (pt) { p.x = pt.x; p.y = pt.y; } }
+    }
+  }
 
   // Keep players out of jail at spawn
   for (const p of players) {
@@ -205,7 +213,7 @@ export function createGame(settings: GameSettings = DEFAULT_SETTINGS, playerName
     winners: [],
     timeElapsed: 0,
     mapWidth: MAP_WIDTH,
-    mapHeight: MAP_HEIGHT,
+    mapHeight: MARS_MAP_HEIGHT,
     taskStations: stations,
     tasksCompleted: 0,
     totalTasks: stations.length,
@@ -500,7 +508,7 @@ function aiCrewBehavior(player: Player, visible: Player[], state: GameState, now
 function wanderAI(player: Player, now: number) {
   if (now > player.aiChangeTime || dist(player, { x: player.aiTargetX, y: player.aiTargetY }) < 30) {
     player.aiTargetX = 100 + Math.random() * (MAP_WIDTH - 200);
-    player.aiTargetY = 100 + Math.random() * (MAP_HEIGHT - 200);
+    player.aiTargetY = 100 + Math.random() * (MARS_MAP_HEIGHT - 200);
     player.aiChangeTime = now + 2000 + Math.random() * 3000;
   }
   player.direction = getNavigationDirection(player.x, player.y, player.aiTargetX, player.aiTargetY);
@@ -613,7 +621,7 @@ function applyAttack(target: Player, attacker?: Player): boolean {
 
 /* ===================== METEORS / SURGES / LAST STAND ===================== */
 function isFreePoint(x: number, y: number, doors: Door[]) {
-  if (x < 80 || y < 80 || x > MAP_WIDTH - 80 || y > MAP_HEIGHT - 80) return false;
+  if (x < 80 || y < 80 || x > MAP_WIDTH - 80 || y > MARS_MAP_HEIGHT - 80) return false;
   if (isPointInsideJail(x, y, 40)) return false;
   const r = resolveCollisions(x, y, doors);
   return Math.hypot(r.x - x, r.y - y) <= 0.5;
@@ -760,7 +768,7 @@ function isPointInsideJail(x: number, y: number, pad = 30): boolean {
 function findFreeSpawnPoint(doors: Door[]): { x: number; y: number } | null {
   for (let attempt = 0; attempt < 40; attempt++) {
     const x = 80 + Math.random() * (MAP_WIDTH - 160);
-    const y = 80 + Math.random() * (MAP_HEIGHT - 160);
+    const y = 80 + Math.random() * (MARS_MAP_HEIGHT - 160);
     if (isPointInsideJail(x, y, 40)) continue;
     // Reject if collision resolution would move the point (i.e. inside wall/rock/door)
     const r = resolveCollisions(x, y, doors);
