@@ -15,7 +15,7 @@ type Bat = { x: number; y: number };
 type Mon = { x: number; y: number; state: 'wander' | 'freeze' | 'vanish' | 'gone' | 'hunt' | 'search'; t: number; tx: number; ty: number; a: number; dir: number; anim: number; sawHide: boolean; next: number; det: number; detT: number; stuck: number };
 interface G {
   walls: Rect[]; obs: Obs[]; chests: Chest[]; crates: Crate[]; plates: Plate[]; bats: Bat[];
-  p: { x: number; y: number; hidden: Crate | null; face: number; dir: 'up' | 'down' | 'left' | 'right' };
+  p: { x: number; y: number; hidden: Crate | null; face: number; aim: number; dir: 'up' | 'down' | 'left' | 'right' };
   m: Mon; battery: number; keys: number; time: number; toast: string; toastT: number;
   stepT: number; batT: number; dead: string; shock: boolean; deadT: number; noiseFx: { x: number; y: number; t: number }[];
 }
@@ -72,7 +72,7 @@ function build(): G {
   const plates: Plate[] = []; // plates are floor tiles: never solid, kept clear of walls/objects/doorways and each other
   for (let i = 0; i < 18; i++) { const r = place(46, 46); if (r) plates.push({ x: r.x + 23, y: r.y + 23, cd: 0 }); }
   return {
-    walls, obs, chests, crates, plates, bats: [], p: { x: 880, y: 1000, hidden: null, face: 0, dir: 'down' },
+    walls, obs, chests, crates, plates, bats: [], p: { x: 880, y: 1000, hidden: null, face: 0, aim: Math.PI / 2, dir: 'down' },
     m: { x: rnd(3400, 4600), y: rnd(200, 1800), state: 'wander', t: 0, tx: WW / 2, ty: WH / 2, a: 1, dir: 1, anim: 0, sawHide: false, next: rnd(6, 10), det: 0, detT: 0, stuck: 0 },
     battery: 100, keys: 0, time: 0, toast: '', toastT: 0, stepT: 0, batT: 6, dead: '', shock: false, deadT: 0, noiseFx: [],
   };
@@ -162,6 +162,10 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
       let iy = (k['s'] || k['arrowdown'] ? 1 : 0) - (k['w'] || k['arrowup'] ? 1 : 0) + joy.current.y;
       const len = Math.hypot(ix, iy); if (len > 1) { ix /= len; iy /= len; }
       const moving = len > 0.1 && !p.hidden;
+      if (moving) {
+        let da = Math.atan2(iy, ix) - p.aim; while (da > Math.PI) da -= 2 * Math.PI; while (da < -Math.PI) da += 2 * Math.PI;
+        p.aim += da * Math.min(1, dt * 12);
+      }
       if (moving) p.dir = Math.abs(ix) > Math.abs(iy) ? (ix > 0 ? 'right' : 'left') : (iy > 0 ? 'down' : 'up');
       const run = runLock.current && moving;
       g.battery -= (p.hidden ? 0.35 : run ? 1.0 : 0.6) * dt;
@@ -303,7 +307,7 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
       for (const n of g.noiseFx) { ctx.strokeStyle = `rgba(255,255,255,${n.t})`; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(n.x, n.y, (0.6 - n.t) * 500, 0, 6.28); ctx.stroke(); }
       // darkness + flashlight
       dctx.setTransform(1, 0, 0, 1, 0, 0); dctx.globalCompositeOperation = 'source-over'; dctx.clearRect(0, 0, W, H);
-      dctx.fillStyle = 'rgba(0,0,0,0.985)'; dctx.fillRect(0, 0, W, H);
+      dctx.fillStyle = `rgba(0,0,0,${0.8 + 0.12 * (1 - g.battery / 100)})`; dctx.fillRect(0, 0, W, H); // dim ambient: everything stays faintly visible
       const dm = Math.hypot(m.x - p.x, m.y - p.y);
       let rad = (60 + 240 * (g.battery / 100)) * z; let inten = 1;
       if (g.battery < 20) inten *= 0.75 + 0.25 * Math.sin(g.time * 30);
@@ -311,9 +315,18 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
       if (p.hidden) rad *= 0.45;
       if (g.shock) { rad = Math.max(rad, 260 * z) * (1 + Math.min(1, g.deadT) * 0.4); inten = 1; }
       const sx = W / 2 + (p.x - cx) * z, sy = H / 2 + (p.y - cy) * z;
-      const gr = dctx.createRadialGradient(sx, sy, rad * 0.1, sx, sy, rad);
-      gr.addColorStop(0, `rgba(0,0,0,${inten})`); gr.addColorStop(0.55, `rgba(0,0,0,${0.8 * inten})`); gr.addColorStop(1, 'rgba(0,0,0,0)');
-      dctx.globalCompositeOperation = 'destination-out'; dctx.fillStyle = gr; dctx.fillRect(0, 0, W, H);
+      dctx.globalCompositeOperation = 'destination-out';
+      const cut = (r0: number, r1: number, a0: number, a1: number, half: number | null) => {
+        const gr = dctx.createRadialGradient(sx, sy, r0, sx, sy, r1);
+        gr.addColorStop(0, `rgba(0,0,0,${a0 * inten})`); gr.addColorStop(0.7, `rgba(0,0,0,${a1 * inten})`); gr.addColorStop(1, 'rgba(0,0,0,0)');
+        dctx.fillStyle = gr; dctx.beginPath(); dctx.moveTo(sx, sy);
+        if (half === null) dctx.arc(sx, sy, r1, 0, 6.2832); else dctx.arc(sx, sy, r1, p.aim - half, p.aim + half);
+        dctx.closePath(); dctx.fill();
+      };
+      const L = rad * 1.7;
+      cut(4, rad * 0.6, 0.5, 0.3, null);          // soft dim glow around the robot
+      cut(8, L * 0.9, 0.45, 0.3, 0.7);            // wide dim cone
+      cut(8, L, 0.9, 0.7, 0.36);                  // bright spotlight in the facing direction
       ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.drawImage(dark, 0, 0);
       // HUD
       ctx.font = 'bold 16px monospace'; ctx.fillStyle = '#ddd'; ctx.textAlign = 'left';
