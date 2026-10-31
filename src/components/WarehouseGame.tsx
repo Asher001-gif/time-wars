@@ -7,14 +7,15 @@ const WW = 4800, WH = 3200, WT = 30;
 const FW = 149, FH = 192, GS = 0.9;
 const KEY = 'warehouse.best';
 type Rect = { x: number; y: number; w: number; h: number };
-type Obs = Rect & { img: 'cWide' | 'cTall' | 'cSmall' | 'bStripe' | 'bPlain' };
+type Obs = Rect & { img: 'cWide' | 'cTall' | 'cSmall' | 'bStripe' | 'bPlain' | 'bed' | 'chair' | 'table' | 'candle' | 'skull' | 'teddy' | 'plant' };
+type Decal = Rect & { img: 'help' | 'run' };
 type Chest = Rect & { key: boolean; bat: boolean; openUntil: number };
 type Crate = Rect;
 type Plate = { x: number; y: number; cd: number };
 type Bat = { x: number; y: number };
 type Mon = { x: number; y: number; state: 'wander' | 'freeze' | 'vanish' | 'gone' | 'hunt' | 'search'; t: number; tx: number; ty: number; a: number; dir: number; anim: number; sawHide: boolean; next: number; det: number; detT: number; stuck: number };
 interface G {
-  walls: Rect[]; obs: Obs[]; chests: Chest[]; crates: Crate[]; plates: Plate[]; bats: Bat[];
+  walls: Rect[]; decals: Decal[]; obs: Obs[]; chests: Chest[]; crates: Crate[]; plates: Plate[]; bats: Bat[];
   p: { x: number; y: number; hidden: Crate | null; face: number; aim: number; dir: 'up' | 'down' | 'left' | 'right' };
   m: Mon; battery: number; keys: number; time: number; toast: string; toastT: number;
   stepT: number; batT: number; dead: string; hbT: number; gT: number; shock: boolean; deadT: number; noiseFx: { x: number; y: number; t: number }[];
@@ -55,9 +56,9 @@ function build(): G {
   vw(80, 2100, 1680, [1100]); vw(80, 2100, 3280, [1500]);
   const obs: Obs[] = [], chests: Chest[] = [], crates: Crate[] = [];
   const all: Rect[] = [...walls, { x: 680, y: 800, w: 400, h: 400 }, ...doors.map(d => ({ x: d.x - 140, y: d.y - 140, w: 280, h: 280 }))];
-  const place = (w: number, h: number): Rect | null => {
+  const place = (w: number, h: number, yMax = WH - 140): Rect | null => {
     for (let i = 0; i < 300; i++) {
-      const r = { x: rnd(140, WW - 140 - w), y: rnd(140, WH - 140 - h), w, h };
+      const r = { x: rnd(140, WW - 140 - w), y: rnd(140, yMax - h), w, h };
       if (!all.some(o => hit(r, o, 150))) { all.push(r); return r; }
     }
     return null;
@@ -66,13 +67,21 @@ function build(): G {
   for (let i = 0; i < 70; i++) { const [img, w, h] = sizes[i % 5]; const r = place(w, h); if (r) obs.push({ ...r, img }); }
   for (let i = 0; i < 22; i++) { const r = place(58, 54); if (r) chests.push({ ...r, key: false, bat: false, openUntil: 0 }); }
   for (let i = 0; i < 16; i++) { const r = place(92, 88); if (r) crates.push(r); }
+  // furniture & props (solid) – indoor pieces stay inside the building, plants/skulls can be anywhere
+  const furn: [Obs['img'], number, number, number, number][] = [
+    ['bed', 104, 167, 6, 2060], ['chair', 80, 109, 10, 2060], ['table', 142, 150, 8, 2060], ['plant', 80, 77, 10, 3000],
+    ['teddy', 69, 73, 6, 2060], ['skull', 38, 46, 8, 3000], ['candle', 26, 58, 10, 2060],
+  ];
+  for (const [img, w, h, n, ym] of furn) for (let i = 0; i < n; i++) { const r = place(w, h, ym); if (r) obs.push({ ...r, img }); }
+  const decals: Decal[] = []; // scrawled floor writing (not solid)
+  for (let i = 0; i < 8; i++) { const img = i % 2 ? 'run' : 'help'; const [w, h] = img === 'help' ? [144, 127] : [126, 134]; const r = place(w, h, 2060); if (r) decals.push({ ...r, img }); }
   chests[Math.floor(Math.random() * chests.length)].key = true;
   const cand = chests.filter(c => !c.key).sort(() => Math.random() - 0.5);
   cand.slice(0, 7).forEach(c => (c.bat = true));
   const plates: Plate[] = []; // plates are floor tiles: never solid, kept clear of walls/objects/doorways and each other
   for (let i = 0; i < 18; i++) { const r = place(46, 46); if (r) plates.push({ x: r.x + 23, y: r.y + 23, cd: 0 }); }
   return {
-    walls, obs, chests, crates, plates, bats: [], p: { x: 880, y: 1000, hidden: null, face: 0, aim: Math.PI / 2, dir: 'down' },
+    walls, decals, obs, chests, crates, plates, bats: [], p: { x: 880, y: 1000, hidden: null, face: 0, aim: Math.PI / 2, dir: 'down' },
     m: { x: rnd(3400, 4600), y: rnd(200, 1800), state: 'wander', t: 0, tx: WW / 2, ty: WH / 2, a: 1, dir: 1, anim: 0, sawHide: false, next: rnd(6, 10), det: 0, detT: 0, stuck: 0 },
     battery: 100, keys: 0, time: 0, toast: '', toastT: 0, stepT: 0, batT: 6, dead: '', hbT: 0, gT: 0, shock: false, deadT: 0, noiseFx: [],
   };
@@ -292,6 +301,7 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
       for (let y = 0; y <= WH; y += 100) { ctx.moveTo(0, y); ctx.lineTo(WW, y); }
       ctx.stroke(); ctx.strokeStyle = '#222'; ctx.lineWidth = 16; ctx.strokeRect(0, 0, WW, WH);
       ctx.fillStyle = '#121212'; for (const w of g.walls) ctx.fillRect(w.x, w.y, w.w, w.h);
+      if (imgs) for (const d of g.decals) { ctx.globalAlpha = 0.75; ctx.drawImage(imgs[d.img], d.x, d.y, d.w, d.h); ctx.globalAlpha = 1; }
       // plates (faint)
       for (const pl of g.plates) {
         ctx.fillStyle = pl.cd > 0 ? '#555' : '#444'; ctx.fillRect(pl.x - 23, pl.y - 23, 46, 46);
