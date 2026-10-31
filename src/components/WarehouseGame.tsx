@@ -28,9 +28,12 @@ let ac: AudioContext | null = null;
 function beep(f: number, d: number, type: OscillatorType = 'square', v = 0.05) {
   try {
     ac = ac || new AudioContext();
+    if (ac.state === 'suspended') void ac.resume();
+    if (ac.state !== 'running') return; // don't queue nodes on a blocked/suspended context
     const o = ac.createOscillator(), g = ac.createGain();
     o.type = type; o.frequency.value = f; g.gain.value = v;
     g.gain.exponentialRampToValueAtTime(0.0001, ac.currentTime + d);
+    o.onended = () => { o.disconnect(); g.disconnect(); };
     o.connect(g); g.connect(ac.destination); o.start(); o.stop(ac.currentTime + d);
   } catch { /* audio blocked */ }
 }
@@ -179,8 +182,9 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
       const tcx = t % GW, tcy = Math.floor(t / GW);
       const hF = (n: number) => { const dx = Math.abs((n % GW) - tcx), dy = Math.abs(Math.floor(n / GW) - tcy); return (dx + dy) + (1.4142 - 2) * Math.min(dx, dy); };
       seen[s] = stamp; gS[s] = 0; parent[s] = -1; push(s, hF(s));
-      let found = false;
+      let found = false, expanded = 0;
       while (heap.length) {
+        if (++expanded > 4000) break; // hard cap so one search can never stall a frame
         const n = pop(); if (closed[n] === stamp) continue; closed[n] = stamp;
         if (n === t) { found = true; break; }
         const cx = n % GW, cy = Math.floor(n / GW);
@@ -303,8 +307,8 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
         const l = Math.hypot(tx - m.x, ty - m.y) || 1, step = sp * dt;
         // plan a collision-free shortest route (A*) and steer along its waypoints
         m.rp -= dt;
-        if (!m.path || Math.hypot(m.ptx - tx, m.pty - ty) > 50 || m.rp <= 0 || m.stuck > 0.4) {
-          m.path = findPath(m.x, m.y, tx, ty); m.pi = 0; m.ptx = tx; m.pty = ty; m.rp = 0.6; if (m.stuck > 0.4) m.stuck = 0.2;
+        if (m.ptx < 0 || Math.hypot(m.ptx - tx, m.pty - ty) > 50 || m.rp <= 0 || m.stuck > 0.4) {
+          m.path = findPath(m.x, m.y, tx, ty); m.pi = 0; m.ptx = tx; m.pty = ty; m.rp = m.path ? 0.6 : 1.5; // failed search: wait before retrying (was every frame -> lag/freeze) if (m.stuck > 0.4) m.stuck = 0.2;
         }
         let wx = tx, wy = ty;
         if (m.path) {
@@ -359,7 +363,7 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
             if (i < 60 && los(x, y, p.x, p.y)) continue; // prefer spots hidden from you by walls/crates
             m.x = x; m.y = y; ok = true;
           }
-          m.state = 'hunt'; m.t = 0; m.wcd = ok ? 8 : 3; m.path = null; m.vx = 0; m.vy = 0; m.a = 0;
+          m.state = 'hunt'; m.t = 0; m.wcd = ok ? 8 : 3; m.path = null; m.ptx = -1; m.vx = 0; m.vy = 0; m.a = 0;
         }
       } else if (m.state === 'wander') {
         m.a = Math.min(1, m.a + dt * 2);
