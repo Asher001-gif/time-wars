@@ -15,7 +15,7 @@ interface G {
   walls: Rect[]; decals: Decal[]; obs: Obs[]; chests: Chest[]; crates: Crate[]; plates: Plate[]; bats: Bat[];
   p: { x: number; y: number; hidden: Crate | null; face: number; aim: number; dir: 'up' | 'down' | 'left' | 'right' };
   m: Mon; battery: number; keys: number; time: number; toast: string; toastT: number;
-  stepT: number; batT: number; dead: string; hbT: number; gT: number; shock: boolean; deadT: number; noiseFx: { x: number; y: number; t: number }[];
+  near: boolean; rT: number; stepT: number; batT: number; dead: string; hbT: number; gT: number; shock: boolean; deadT: number; noiseFx: { x: number; y: number; t: number }[];
 }
 type Best = { time: number; score: number };
 const readBest = (): Best => { try { return JSON.parse(localStorage.getItem(KEY) || '') as Best; } catch { return { time: 0, score: 0 }; } };
@@ -35,6 +35,41 @@ function beep(f: number, d: number, type: OscillatorType = 'square', v = 0.05) {
   } catch { /* audio blocked */ }
 }
 
+function audioCtx() { ac = ac || new AudioContext(); if (ac.state === 'suspended') void ac.resume(); return ac; }
+// low dissonant drone that swells as the monster closes in
+function startDrone() {
+  try {
+    const c = audioCtx(); const out = c.createGain(); out.gain.value = 0;
+    const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 240;
+    const oscs = ([[46, 'sawtooth'], [49.5, 'sawtooth'], [92.5, 'triangle']] as [number, OscillatorType][]).map(([f, t]) => { const o = c.createOscillator(); o.type = t; o.frequency.value = f; o.connect(lp); o.start(); return o; });
+    const lfo = c.createOscillator(), lg = c.createGain(); lfo.frequency.value = 0.35; lg.gain.value = 18; lfo.connect(lg); lg.connect(lp.frequency); lfo.start();
+    lp.connect(out); out.connect(c.destination);
+    return {
+      set: (v: number) => out.gain.setTargetAtTime(v, c.currentTime, 0.25),
+      stop: () => { try { out.gain.setTargetAtTime(0, c.currentTime, 0.05); setTimeout(() => { oscs.forEach(o => o.stop()); lfo.stop(); out.disconnect(); }, 300); } catch { /* ignore */ } },
+    };
+  } catch { return null; }
+}
+// breathy rasp / scrape (filtered noise burst)
+function rasp(dur: number, freq: number, v: number) {
+  try {
+    const c = audioCtx(); const buf = c.createBuffer(1, Math.ceil(c.sampleRate * dur), c.sampleRate); const d = buf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * Math.sin(Math.PI * i / d.length);
+    const src = c.createBufferSource(); src.buffer = buf;
+    const bp = c.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = freq; bp.Q.value = 1.2;
+    const g = c.createGain(); g.gain.value = v; src.connect(bp); bp.connect(g); g.connect(c.destination); src.start();
+  } catch { /* audio blocked */ }
+}
+// sudden screech sting when the monster first gets close
+function screech() {
+  try {
+    const c = audioCtx(); const t = c.currentTime, g = c.createGain();
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.1, t + 0.06); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.9); g.connect(c.destination);
+    for (const m of [1, 1.414]) { const o = c.createOscillator(); o.type = 'sawtooth'; o.frequency.setValueAtTime(380 * m, t); o.frequency.exponentialRampToValueAtTime(1900 * m, t + 0.7); o.connect(g); o.start(t); o.stop(t + 0.9); }
+    rasp(0.8, 2200, 0.12);
+  } catch { /* audio blocked */ }
+}
+
 function build(): G {
   const L = buildLayout();
   const chests: Chest[] = L.chests.map(r => ({ ...r, key: false, bat: false, openUntil: 0 }));
@@ -45,7 +80,7 @@ function build(): G {
   return {
     walls, decals, obs, chests, crates, plates, bats: [], p: { x: 880, y: 1000, hidden: null, face: 0, aim: Math.PI / 2, dir: 'down' },
     m: { x: rnd(3400, 4600), y: rnd(200, 1800), state: 'wander', t: 0, tx: WW / 2, ty: WH / 2, a: 1, dir: 1, anim: 0, sawHide: false, next: rnd(6, 10), det: 0, detT: 0, stuck: 0, vx: 0, vy: 0, sv: 0, d8: 2, pd: 2, db: 1 },
-    battery: 100, keys: 0, time: 0, toast: '', toastT: 0, stepT: 0, batT: 6, dead: '', hbT: 0, gT: 0, shock: false, deadT: 0, noiseFx: [],
+    battery: 100, keys: 0, time: 0, toast: '', toastT: 0, stepT: 0, batT: 6, dead: '', hbT: 0, gT: 0, shock: false, deadT: 0, noiseFx: [], near: false, rT: 0,
   };
 }
 
@@ -81,6 +116,7 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
     let imgs: WhImages | null = null; let raf = 0, last = performance.now(), alive = true;
     loadWarehouseAssets().then(i => { imgs = i; });
     const g = build(); gref.current = g;
+    const drone = startDrone();
     const resize = () => { canvas.width = dark.width = window.innerWidth; canvas.height = dark.height = window.innerHeight; };
     resize(); window.addEventListener('resize', resize);
     const toast = (s: string) => { g.toast = s; g.toastT = 2.2; };
@@ -258,6 +294,15 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
           if (m.state === 'hunt' && d < 450) { g.gT -= dt; if (g.gT <= 0) { g.gT = 1.4; beep(rnd(55, 90), 0.5, 'sawtooth', 0.03 + prox * 0.06); } }
         }
       }
+      // horror sounds: drone swells with proximity, screech sting on first approach, raspy breathing when very close
+      {
+        const vis = m.a > 0.2 && m.state !== 'gone';
+        const prox = vis ? Math.max(0, 1 - d / 1000) : 0;
+        drone?.set(g.dead ? 0 : Math.pow(prox, 1.4) * 0.16);
+        if (vis && d < 520 && !g.near) { g.near = true; screech(); }
+        if (d > 760 || !vis) g.near = false;
+        if (vis && d < 380) { g.rT -= dt; if (g.rT <= 0) { g.rT = 1.3 + Math.random() * 0.6; rasp(0.7, rnd(500, 900), 0.05 + (1 - d / 380) * 0.12); } }
+      }
       if (!p.hidden && m.a > 0.5 && d < 44) die('The monster got you.', true);
       m.db = Math.min(1, m.db + dt * 9); // quick crossfade when the facing changes
       g.noiseFx.forEach(n => (n.t -= dt)); g.noiseFx = g.noiseFx.filter(n => n.t > 0);
@@ -362,7 +407,7 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
       if (imgs) update(dt); draw(); raf = requestAnimationFrame(loop);
     };
     raf = requestAnimationFrame(loop);
-    return () => { alive = false; cancelAnimationFrame(raf); window.removeEventListener('resize', resize); };
+    return () => { alive = false; drone?.stop(); cancelAnimationFrame(raf); window.removeEventListener('resize', resize); };
   }, [phase, touch]);
 
   const onDown = (e: React.PointerEvent) => { if (joy.current.id < 0 && e.clientX < window.innerWidth * 0.6) joy.current = { x: 0, y: 0, id: e.pointerId, ox: e.clientX, oy: e.clientY }; };
