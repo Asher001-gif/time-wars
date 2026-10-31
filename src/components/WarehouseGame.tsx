@@ -3,18 +3,18 @@ import crackUrl from '@/assets/warehouse/crack.png';
 import DraggableExitButton from './DraggableExitButton';
 import { loadWarehouseAssets, WhImages } from '@/game/warehouseAssets';
 
-const WW = 3400, WH = 2300;
+const WW = 4800, WH = 3200, WT = 30;
 const FW = 149, FH = 192, GS = 0.9;
 const KEY = 'warehouse.best';
 type Rect = { x: number; y: number; w: number; h: number };
 type Obs = Rect & { img: 'cWide' | 'cTall' | 'cSmall' | 'bStripe' | 'bPlain' };
-type Chest = Rect & { key: boolean; openUntil: number };
+type Chest = Rect & { key: boolean; bat: boolean; openUntil: number };
 type Crate = Rect;
 type Plate = { x: number; y: number; cd: number };
 type Bat = { x: number; y: number };
 type Mon = { x: number; y: number; state: 'wander' | 'freeze' | 'vanish' | 'gone' | 'hunt' | 'search'; t: number; tx: number; ty: number; a: number; dir: number; anim: number; sawHide: boolean; next: number; det: number; detT: number; stuck: number };
 interface G {
-  obs: Obs[]; chests: Chest[]; crates: Crate[]; plates: Plate[]; bats: Bat[];
+  walls: Rect[]; obs: Obs[]; chests: Chest[]; crates: Crate[]; plates: Plate[]; bats: Bat[];
   p: { x: number; y: number; hidden: Crate | null; face: number; dir: 'up' | 'down' | 'left' | 'right' };
   m: Mon; battery: number; keys: number; time: number; toast: string; toastT: number;
   stepT: number; batT: number; dead: string; shock: boolean; deadT: number; noiseFx: { x: number; y: number; t: number }[];
@@ -38,26 +38,43 @@ function beep(f: number, d: number, type: OscillatorType = 'square', v = 0.05) {
 }
 
 function build(): G {
+  const walls: Rect[] = [], doors: { x: number; y: number }[] = [];
+  const hw = (x1: number, x2: number, y: number, gaps: number[]) => {
+    let cur = x1;
+    for (const c of [...gaps].sort((a, b) => a - b)) { if (c - 90 > cur) walls.push({ x: cur, y: y - WT / 2, w: c - 90 - cur, h: WT }); cur = c + 90; doors.push({ x: c, y }); }
+    if (x2 > cur) walls.push({ x: cur, y: y - WT / 2, w: x2 - cur, h: WT });
+  };
+  const vw = (y1: number, y2: number, x: number, gaps: number[]) => {
+    let cur = y1;
+    for (const c of [...gaps].sort((a, b) => a - b)) { if (c - 90 > cur) walls.push({ x: x - WT / 2, y: cur, w: WT, h: c - 90 - cur }); cur = c + 90; doors.push({ x, y: c }); }
+    if (y2 > cur) walls.push({ x: x - WT / 2, y: cur, w: WT, h: y2 - cur });
+  };
+  // Warehouse building: 3 rooms side by side, backyard to the south
+  hw(80, 4720, 80, []); hw(80, 4720, 2100, [880, 2480, 4000]);
+  vw(80, 2100, 80, []); vw(80, 2100, 4720, []);
+  vw(80, 2100, 1680, [1100]); vw(80, 2100, 3280, [1500]);
   const obs: Obs[] = [], chests: Chest[] = [], crates: Crate[] = [];
-  const all: Rect[] = [{ x: WW / 2 - 140, y: WH / 2 - 140, w: 280, h: 280 }]; // clear spawn
+  const all: Rect[] = [...walls, { x: 680, y: 800, w: 400, h: 400 }, ...doors.map(d => ({ x: d.x - 140, y: d.y - 140, w: 280, h: 280 }))];
   const place = (w: number, h: number): Rect | null => {
-    for (let i = 0; i < 200; i++) {
-      const r = { x: rnd(80, WW - 80 - w), y: rnd(80, WH - 80 - h), w, h };
+    for (let i = 0; i < 300; i++) {
+      const r = { x: rnd(140, WW - 140 - w), y: rnd(140, WH - 140 - h), w, h };
       if (!all.some(o => hit(r, o, 150))) { all.push(r); return r; }
     }
     return null;
   };
   const sizes: [Obs['img'], number, number][] = [['cWide', 230, 156], ['cTall', 132, 196], ['cSmall', 112, 152], ['bStripe', 180, 98], ['bPlain', 184, 98]];
-  for (let i = 0; i < 30; i++) { const [img, w, h] = sizes[i % 5]; const r = place(w, h); if (r) obs.push({ ...r, img }); }
-  for (let i = 0; i < 10; i++) { const r = place(58, 54); if (r) chests.push({ ...r, key: false, openUntil: 0 }); }
-  for (let i = 0; i < 9; i++) { const r = place(92, 88); if (r) crates.push(r); }
+  for (let i = 0; i < 70; i++) { const [img, w, h] = sizes[i % 5]; const r = place(w, h); if (r) obs.push({ ...r, img }); }
+  for (let i = 0; i < 22; i++) { const r = place(58, 54); if (r) chests.push({ ...r, key: false, bat: false, openUntil: 0 }); }
+  for (let i = 0; i < 16; i++) { const r = place(92, 88); if (r) crates.push(r); }
   chests[Math.floor(Math.random() * chests.length)].key = true;
-  const plates: Plate[] = [];
-  for (let i = 0; i < 9; i++) { const r = place(46, 46); if (r) plates.push({ x: r.x + 23, y: r.y + 23, cd: 0 }); all.pop(); }
+  const cand = chests.filter(c => !c.key).sort(() => Math.random() - 0.5);
+  cand.slice(0, 7).forEach(c => (c.bat = true));
+  const plates: Plate[] = []; // plates are floor tiles: never solid, kept clear of walls/objects/doorways and each other
+  for (let i = 0; i < 18; i++) { const r = place(46, 46); if (r) plates.push({ x: r.x + 23, y: r.y + 23, cd: 0 }); }
   return {
-    obs, chests, crates, plates, bats: [], p: { x: WW / 2, y: WH / 2, hidden: null, face: 0, dir: 'down' },
-    m: { x: rnd(200, WW - 200), y: rnd(200, 500), state: 'wander', t: 0, tx: WW / 2, ty: WH / 2, a: 1, dir: 1, anim: 0, sawHide: false, next: rnd(6, 10), det: 0, detT: 0, stuck: 0 },
-    battery: 100, keys: 0, time: 0, toast: '', toastT: 0, stepT: 0, batT: 0, dead: '', shock: false, deadT: 0, noiseFx: [],
+    walls, obs, chests, crates, plates, bats: [], p: { x: 880, y: 1000, hidden: null, face: 0, dir: 'down' },
+    m: { x: rnd(3400, 4600), y: rnd(200, 1800), state: 'wander', t: 0, tx: WW / 2, ty: WH / 2, a: 1, dir: 1, anim: 0, sawHide: false, next: rnd(6, 10), det: 0, detT: 0, stuck: 0 },
+    battery: 100, keys: 0, time: 0, toast: '', toastT: 0, stepT: 0, batT: 6, dead: '', shock: false, deadT: 0, noiseFx: [],
   };
 }
 
@@ -104,11 +121,11 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
       }
       if (m.state === 'gone' && Math.hypot(m.x - x, m.y - y) < r * 1.6) { m.state = 'hunt'; m.tx = x; m.ty = y; m.t = 0; m.a = 0.2; }
     };
-    const SS: Rect[] = [...g.obs, ...g.chests, ...g.crates]; const solids = () => SS;
+    const SS: Rect[] = [...g.walls, ...g.obs, ...g.chests, ...g.crates]; const solids = () => SS;
     const mrect = (x: number, y: number): Rect => ({ x: x - 34, y: y - 84, w: 68, h: 84 }); // ghost collides with its legs (bottom half)
     const blocked = (x: number, y: number) => { const r = mrect(x, y); return SS.some(o => hit(r, o)); };
     const los = (ax: number, ay: number, bx: number, by: number) => {
-      const n = Math.ceil(Math.hypot(bx - ax, by - ay) / 24);
+      const n = Math.ceil(Math.hypot(bx - ax, by - ay) / 14);
       for (let i = 1; i < n; i++) { const x = ax + (bx - ax) * i / n, y = ay + (by - ay) * i / n; if (SS.some(o => x > o.x && x < o.x + o.w && y > o.y && y < o.y + o.h)) return false; }
       return true;
     };
@@ -147,7 +164,7 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
       const moving = len > 0.1 && !p.hidden;
       if (moving) p.dir = Math.abs(ix) > Math.abs(iy) ? (ix > 0 ? 'right' : 'left') : (iy > 0 ? 'down' : 'up');
       const run = runLock.current && moving;
-      g.battery -= (p.hidden ? 0.5 : run ? 1.5 : 0.9) * dt;
+      g.battery -= (p.hidden ? 0.35 : run ? 1.0 : 0.6) * dt;
       if (g.battery <= 0) { g.battery = 0; die('Your battery ran out.'); return; }
       if (moving) {
         const sp = run ? 215 : 120; moveP(ix * sp * dt, iy * sp * dt); if (ix) p.face = ix;
@@ -160,19 +177,12 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
           pl.cd = 10; noise(pl.x, pl.y, 1100); beep(520, 0.5, 'sawtooth', 0.08); toast('CLANK! That was loud...');
         }
       }
-      // batteries
+      // batteries only appear inside chests
       g.batT -= dt;
-      if (g.bats.length < 4 && g.batT <= 0) {
-        g.batT = 11;
-        for (let i = 0; i < 30; i++) {
-          const r = { x: rnd(80, WW - 80), y: rnd(80, WH - 80), w: 22, h: 38 };
-          if (!solids().some(o => hit(r, o, 20)) && Math.hypot(r.x - p.x, r.y - p.y) > 300) { g.bats.push({ x: r.x, y: r.y }); break; }
-        }
+      if (g.batT <= 0) {
+        g.batT = 12;
+        if (g.chests.filter(c => c.bat).length < 7) { const c = g.chests.filter(c => !c.bat && !c.key && !c.openUntil); if (c.length) c[Math.floor(Math.random() * c.length)].bat = true; }
       }
-      if (!p.hidden) g.bats = g.bats.filter(b => {
-        if (Math.hypot(b.x - p.x, b.y - p.y) < 32) { g.battery = Math.min(100, g.battery + 35); toast('+35% BATTERY'); beep(880, 0.15, 'sine', 0.07); return false; }
-        return true;
-      });
       // interact
       for (const c of g.chests) if (c.openUntil && c.openUntil < g.time) c.openUntil = 0;
       if (act.current) {
@@ -191,8 +201,8 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
             ch.openUntil = g.time + 25; noise(ch.x, ch.y, 520); beep(300, 0.25, 'square', 0.06);
             if (ch.key) {
               g.keys++; ch.key = false; toast('KEY FOUND!  +100'); beep(1100, 0.3, 'sine', 0.08);
-              const others = g.chests.filter(c => c !== ch); others[Math.floor(Math.random() * others.length)].key = true;
-            } else if (Math.random() < 0.3) { g.battery = Math.min(100, g.battery + 25); toast('Battery cell inside! +25%'); }
+              const others = g.chests.filter(c => c !== ch && !c.bat); others[Math.floor(Math.random() * others.length)].key = true;
+            } else if (ch.bat) { ch.bat = false; g.battery = Math.min(100, g.battery + 35); toast('BATTERY FOUND! +35%'); beep(880, 0.2, 'sine', 0.07); }
             else toast('Empty...');
           }
         }
@@ -261,18 +271,18 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
       ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillStyle = '#111'; ctx.fillRect(0, 0, W, H);
       ctx.setTransform(z, 0, 0, z, W / 2 - cx * z, H / 2 - cy * z);
       // floor
-      ctx.fillStyle = '#3a3a3a'; ctx.fillRect(0, 0, WW, WH);
+      ctx.fillStyle = '#2b2b2b'; ctx.fillRect(0, 0, WW, WH);
+      ctx.fillStyle = '#3a3a3a'; ctx.fillRect(80, 80, WW - 160, 2020);
+      ctx.fillStyle = 'rgba(255,255,255,0.07)'; ctx.font = 'bold 120px monospace'; ctx.textAlign = 'center'; ctx.fillText('BACKYARD', WW / 2, 2700);
       ctx.strokeStyle = '#2f2f2f'; ctx.lineWidth = 2; ctx.beginPath();
       for (let x = 0; x <= WW; x += 100) { ctx.moveTo(x, 0); ctx.lineTo(x, WH); }
       for (let y = 0; y <= WH; y += 100) { ctx.moveTo(0, y); ctx.lineTo(WW, y); }
       ctx.stroke(); ctx.strokeStyle = '#222'; ctx.lineWidth = 16; ctx.strokeRect(0, 0, WW, WH);
+      ctx.fillStyle = '#121212'; for (const w of g.walls) ctx.fillRect(w.x, w.y, w.w, w.h);
       // plates (faint)
       for (const pl of g.plates) {
         ctx.fillStyle = pl.cd > 0 ? '#555' : '#444'; ctx.fillRect(pl.x - 23, pl.y - 23, 46, 46);
         ctx.strokeStyle = '#2a2a2a'; ctx.lineWidth = 2; ctx.strokeRect(pl.x - 23, pl.y - 23, 46, 46);
-      }
-      for (const b of g.bats) {
-        if (imgs) { ctx.globalAlpha = 0.8 + 0.2 * Math.sin(g.time * 6); ctx.drawImage(imgs.battery, b.x, b.y, 22, 38); ctx.globalAlpha = 1; }
       }
       type D = { y: number; f: () => void };
       const list: D[] = [];
@@ -373,7 +383,7 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
             </div>
           ) : (
             <div className="max-w-md text-sm text-neutral-400 space-y-1">
-              <p>Survive. Find keys in chests. Find batteries — your battery is your life and your light.</p>
+              <p>Explore 3 rooms and the backyard. Chests hold keys and batteries (batteries only spawn in chests) — your battery is your life and your light.</p>
               <p>WASD/Arrows move · 5 open chest / hide · 0 toggle sprint (loud)</p>
               <p>Hide in X crates. If the monster sees you enter, you're dead. Hidden pressure plates are loud.</p>
             </div>
