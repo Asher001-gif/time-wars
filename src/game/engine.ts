@@ -594,6 +594,27 @@ function isKillImmune(attacker: Player, target: Player): boolean {
   return (attacker.ability === 'kill' || attacker.ability === 'shooter') && target.ability === 'jail';
 }
 
+/** Crew hit by a traitor becomes a traitor (joins the traitor team) instead of dying. */
+function convertToTraitor(target: Player, attacker: Player) {
+  target.ability = 'kill';
+  target.role = 'imposter';
+  target.team = attacker.team;
+  target.doingTask = false;
+  target.taskStationId = null;
+  target.taskProgress = 0;
+  target.killCooldown = 0;
+  target.actionPlanTargetId = null;
+  target.lockedTargetId = null;
+  if (nearHuman(target.x, target.y)) {
+    burst(target.x, target.y, '#e03030', 28, 4.2, 3.5); ring(target.x, target.y, 80, '#e03030');
+    floater(target.x, target.y, '😈 TRAITOR!', '#ff6a5a', 16); sfx('kill');
+  }
+  if (target.isHuman) {
+    shake(14); flash('#ff0000', 340);
+    banner('YOU ARE NOW A TRAITOR', '#e03030', 'Kill the others to win!');
+  }
+}
+
 /** Attack interception via shields. Returns true if attack was absorbed. */
 function applyAttack(target: Player, attacker?: Player): boolean {
   const now = performance.now();
@@ -605,6 +626,12 @@ function applyAttack(target: Player, attacker?: Player): boolean {
       if (target.isHuman) { shake(8); flash('#7fe7ff'); }
     }
     return true;
+  }
+  // NEW RULE: a traitor's hit doesn't kill crew — it converts them into a traitor.
+  if (attacker && isTraitor(attacker) && target.ability === 'crew' && target.team !== attacker.team) {
+    convertToTraitor(target, attacker);
+    registerCombo(attacker, 'KILL', now);
+    return false;
   }
   target.alive = false;
   target.doingTask = false;
