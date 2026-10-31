@@ -1,4 +1,28 @@
-import { TaskChallenge, TaskStation, TaskType, TOTAL_TASKS, MAP_WIDTH, MAP_HEIGHT, TeamIndex } from './types';
+import { TaskChallenge, TaskStation, TaskType, TOTAL_TASKS, MAP_WIDTH, MAP_HEIGHT, TeamIndex, JAIL_RECT } from './types';
+import { pointClearance } from './collision';
+
+const MIN_CLEAR = 60; // keep tasks well away from walls / rocks / pylons so they're always reachable
+const JAIL_MARGIN = 80;
+
+/** True when (x,y) is not near any wall, obstacle, the jail room, or the map edge. */
+function isSafe(x: number, y: number): boolean {
+  if (x < 80 || y < 80 || x > MAP_WIDTH - 80 || y > MAP_HEIGHT - 80) return false;
+  if (x > JAIL_RECT.x - JAIL_MARGIN && x < JAIL_RECT.x + JAIL_RECT.w + JAIL_MARGIN &&
+      y > JAIL_RECT.y - JAIL_MARGIN && y < JAIL_RECT.y + JAIL_RECT.h + JAIL_MARGIN) return false;
+  return pointClearance(x, y) >= MIN_CLEAR;
+}
+
+/** Nearest safe point to (x,y), searching outward in rings. */
+function nearestSafe(x: number, y: number, dx = 0): { x: number; y: number } {
+  if (isSafe(x + dx, y)) return { x, y };
+  for (let r = 20; r <= 500; r += 20) {
+    for (let a = 0; a < 24; a++) {
+      const nx = x + Math.cos((a / 24) * Math.PI * 2) * r, ny = y + Math.sin((a / 24) * Math.PI * 2) * r;
+      if (isSafe(nx + dx, ny)) return { x: nx, y: ny };
+    }
+  }
+  return { x, y };
+}
 
 const TASK_LABELS: Record<TaskType, string> = {
   frequency: '📻 Frequency',
@@ -34,14 +58,17 @@ export function createTaskStations(count: number = TOTAL_TASKS, team: TeamIndex 
   const n = Math.max(0, Math.min(15, count));
   const stations: TaskStation[] = [];
   for (let i = 0; i < n; i++) {
+    const dx = team === 1 ? 35 : team === 2 ? -35 : 0;
     let pos = positions[i];
     if (!pos) {
-      // Repeat a previous task at a new random location within map bounds
-      pos = {
-        x: 150 + Math.random() * (MAP_WIDTH - 300),
-        y: 150 + Math.random() * (MAP_HEIGHT - 300),
-      };
+      // Repeat a previous task at a random location that is NOT in/near walls or the jail
+      for (let tries = 0; tries < 200; tries++) {
+        const c = { x: 150 + Math.random() * (MAP_WIDTH - 300), y: 150 + Math.random() * (MAP_HEIGHT - 300) };
+        if (isSafe(c.x + dx, c.y)) { pos = c; break; }
+      }
+      if (!pos) pos = { x: 800, y: 900 };
     }
+    pos = nearestSafe(pos.x, pos.y, dx);
     const type = types[i % types.length];
     stations.push({
       id: idOffset + i,
