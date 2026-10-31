@@ -13,7 +13,6 @@ import VolleyballPointsScreen from '@/components/VolleyballPointsScreen';
 import RoleBanner from '@/components/RoleBanner';
 import GameOverScreen from '@/components/GameOverScreen';
 import LoadingScreen from '@/components/LoadingScreen';
-import TutorialScreen from '@/components/TutorialScreen';
 
 export default function Index() {
   const [gameState, setGameState] = useState<GameState | null>(null);
@@ -21,7 +20,6 @@ export default function Index() {
   const [screen, setScreen] = useState<'lobby' | 'games' | 'footballTime' | 'volleyPoints'>('lobby');
   const [volleyTarget, setVolleyTarget] = useState<number | null>(null);
   const [warehouse, setWarehouse] = useState(false);
-  const [showTutorial, setShowTutorial] = useState(false);
   const [username, setUsername] = useState<string>('Astro');
   const [draftName, setDraftName] = useState<string>('');
   const [saved, setSaved] = useState(false);
@@ -95,7 +93,6 @@ export default function Index() {
     );
   }
   if (!gameState) {
-    if (showTutorial) return <TutorialScreen onBack={() => setShowTutorial(false)} />;
     return (
       <>
         <div className="fixed top-4 right-4 z-[60] flex items-center gap-2 p-2 rounded-xl bg-blue-950/40 border-2 border-blue-400 backdrop-blur-sm max-w-[280px] shadow-[0_0_18px_rgba(59,130,246,0.5)]">
@@ -133,10 +130,7 @@ export default function Index() {
             </>
           )}
         </div>
-        <LobbyScreen
-          onEnter={() => setScreen('games')}
-          onTutorial={() => setShowTutorial(true)}
-        />
+        <LobbyScreen onEnter={() => setScreen('games')} />
       </>
     );
   }
