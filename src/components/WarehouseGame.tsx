@@ -387,7 +387,6 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
         prompt = cr ? '5: hide' : ch ? '5: open chest' : '';
       }
       if (prompt) { ctx.font = 'bold 16px monospace'; ctx.fillStyle = '#fff'; ctx.fillText(prompt, W / 2, H / 2 + 60); }
-      ctx.font = '11px monospace'; ctx.fillStyle = '#888'; ctx.fillText('You can hide inside X crates!', W / 2, H - 10);
       if (g.shock && imgs) {
         const t = g.deadT;
         if (t < 1.2) { const k = (1.2 - t) * 18; ctx.drawImage(canvas, (Math.random() - 0.5) * k, (Math.random() - 0.5) * k); }
@@ -439,9 +438,9 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
             </div>
           ) : (
             <div className="max-w-md text-sm text-neutral-400 space-y-1">
-              <p>Explore 3 rooms and the backyard. Chests hold keys and batteries (batteries only spawn in chests) — your battery is your life and your light.</p>
-              <p>WASD/Arrows move · 5 open chest / hide · 0 toggle sprint (loud)</p>
-              <p>Hide in X crates. If the monster sees you enter, you're dead. Hidden pressure plates are loud.</p>
+              <p>Explore 3 rooms and the backyard. Chests hold batteries — your battery is your life and your light.</p>
+              <p>WASD/Arrows move · 5 open chest · 0 toggle sprint (loud)</p>
+              <p>Stay out of the monster's sight. Hidden pressure plates are loud.</p>
             </div>
           )}
           <p className="text-neutral-400 text-sm">Best time: {fmt(best.time)} · Best score: {best.score}</p>
