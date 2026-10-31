@@ -248,7 +248,7 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
       }
       if (moving) p.dir = Math.abs(ix) > Math.abs(iy) ? (ix > 0 ? 'right' : 'left') : (iy > 0 ? 'down' : 'up');
       const run = runLock.current && moving;
-      g.battery -= (p.hidden ? 0.6 * 3 : run ? 1.0 : 0.6) * dt; // hiding drains 3x faster than normal
+      g.battery -= (p.hidden ? 0.6 * 3 : run ? 0.6 * 2 : 0.6) * dt; // hiding drains 3x, sprinting/fast walking drains 2x
       if (g.battery <= 0) { g.battery = 0; die('Your battery ran out.'); return; }
       if (moving) {
         const sp = run ? 215 : 120; moveP(ix * sp * dt, iy * sp * dt); if (ix) p.face = ix;
