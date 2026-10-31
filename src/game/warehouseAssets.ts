@@ -1,4 +1,4 @@
-import monster from '@/assets/warehouse/gore-crawler-sheet.png';
+import monster from '@/assets/warehouse/walker-sheet.png';
 import chestOpen from '@/assets/warehouse/chest-open.png';
 import chestClosed from '@/assets/warehouse/chest-closed.png';
 import cWide from '@/assets/warehouse/container-wide.png';

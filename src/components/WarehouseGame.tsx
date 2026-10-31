@@ -4,7 +4,7 @@ import DraggableExitButton from './DraggableExitButton';
 import { loadWarehouseAssets, WhImages } from '@/game/warehouseAssets';
 
 const WW = 4800, WH = 3200, WT = 30;
-const MS = 3; // Gore Crawler: 64px pixel art drawn at 3x (feet-centre at x=40 in each frame)
+const MS = 3, MC = 88; // walker monster: 88px pixel-art cells (9 walk frames x 8 directions: E SE S SW W NW N NE) drawn at 3x, feet at (44,82)
 const KEY = 'warehouse.best';
 type Rect = { x: number; y: number; w: number; h: number };
 type Obs = Rect & { img: 'cWide' | 'cTall' | 'cSmall' | 'bStripe' | 'bPlain' | 'bed' | 'chair' | 'table' | 'candle' | 'skull' | 'teddy' | 'plant' };
@@ -13,7 +13,7 @@ type Chest = Rect & { key: boolean; bat: boolean; openUntil: number };
 type Crate = Rect;
 type Plate = { x: number; y: number; cd: number };
 type Bat = { x: number; y: number };
-type Mon = { x: number; y: number; state: 'wander' | 'freeze' | 'vanish' | 'gone' | 'hunt' | 'search'; t: number; tx: number; ty: number; a: number; dir: number; anim: number; sawHide: boolean; next: number; det: number; detT: number; stuck: number; vx: number; sv: number; fl: number };
+type Mon = { x: number; y: number; state: 'wander' | 'freeze' | 'vanish' | 'gone' | 'hunt' | 'search'; t: number; tx: number; ty: number; a: number; dir: number; anim: number; sawHide: boolean; next: number; det: number; detT: number; stuck: number; vx: number; vy: number; sv: number; d8: number; pd: number; db: number };
 interface G {
   walls: Rect[]; decals: Decal[]; obs: Obs[]; chests: Chest[]; crates: Crate[]; plates: Plate[]; bats: Bat[];
   p: { x: number; y: number; hidden: Crate | null; face: number; aim: number; dir: 'up' | 'down' | 'left' | 'right' };
@@ -82,7 +82,7 @@ function build(): G {
   for (let i = 0; i < 18; i++) { const r = place(46, 46); if (r) plates.push({ x: r.x + 23, y: r.y + 23, cd: 0 }); }
   return {
     walls, decals, obs, chests, crates, plates, bats: [], p: { x: 880, y: 1000, hidden: null, face: 0, aim: Math.PI / 2, dir: 'down' },
-    m: { x: rnd(3400, 4600), y: rnd(200, 1800), state: 'wander', t: 0, tx: WW / 2, ty: WH / 2, a: 1, dir: 1, anim: 0, sawHide: false, next: rnd(6, 10), det: 0, detT: 0, stuck: 0, vx: 0, sv: 0, fl: 1 },
+    m: { x: rnd(3400, 4600), y: rnd(200, 1800), state: 'wander', t: 0, tx: WW / 2, ty: WH / 2, a: 1, dir: 1, anim: 0, sawHide: false, next: rnd(6, 10), det: 0, detT: 0, stuck: 0, vx: 0, vy: 0, sv: 0, d8: 2, pd: 2, db: 1 },
     battery: 100, keys: 0, time: 0, toast: '', toastT: 0, stepT: 0, batT: 6, dead: '', hbT: 0, gT: 0, shock: false, deadT: 0, noiseFx: [],
   };
 }
@@ -239,11 +239,16 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
         const moved = Math.hypot(m.x - ox, m.y - oy);
         if (moved < step * 0.4 && l > 40) { m.stuck += dt; if (m.detT <= 0) { m.det = (Math.random() < 0.5 ? 1 : -1) * rnd(1.0, 1.9); m.detT = 0.6; } }
         else m.stuck = Math.max(0, m.stuck - dt);
-        // smoothed velocity -> stable facing; smoothed speed drives the walk cycle
-        m.vx += ((m.x - ox) / dt - m.vx) * (1 - Math.exp(-dt * 7));
-        if (Math.abs(m.vx) > 8) m.dir = m.vx > 0 ? 1 : -1;
-        m.sv += (moved / dt - m.sv) * (1 - Math.exp(-dt * 8));
-        m.anim += (m.sv * dt) / 38;
+        // smoothed velocity -> stable 8-way facing (with hysteresis so it never flickers between sectors)
+        const kv = 1 - Math.exp(-dt * 7);
+        m.vx += ((m.x - ox) / dt - m.vx) * kv; m.vy += ((m.y - oy) / dt - m.vy) * kv;
+        if (Math.hypot(m.vx, m.vy) > 12) {
+          const ang = Math.atan2(m.vy, m.vx); let off = ang - m.d8 * Math.PI / 4;
+          while (off > Math.PI) off -= 2 * Math.PI; while (off < -Math.PI) off += 2 * Math.PI;
+          if (Math.abs(off) > 0.5) { m.pd = m.d8; m.db = 0; m.d8 = ((Math.round(ang / (Math.PI / 4)) % 8) + 8) % 8; }
+        }
+        m.sv += (moved / dt - m.sv) * (1 - Math.exp(-dt * 8)); // smoothed speed drives the walk cycle
+        m.anim += (m.sv * dt) / 13;
         return l;
       };
       const pick = () => { for (let i = 0; i < 20; i++) { const tx = rnd(100, WW - 100), ty = rnd(120, WH - 100); if (!blocked(tx, ty)) { m.tx = tx; m.ty = ty; break; } } m.stuck = 0; m.t = 0; };
@@ -286,7 +291,7 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
         }
       }
       if (!p.hidden && m.a > 0.5 && d < 44) die('The monster got you.', true);
-      m.fl += (m.dir - m.fl) * (1 - Math.exp(-dt * 14)); // quick squash-turn instead of an instant flip
+      m.db = Math.min(1, m.db + dt * 9); // quick crossfade when the facing changes
       g.noiseFx.forEach(n => (n.t -= dt)); g.noiseFx = g.noiseFx.filter(n => n.t > 0);
     };
 
@@ -320,19 +325,14 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
         if (!p.hidden) list.push({ y: p.y + 14, f: () => drawBot(ctx, imgs!, p.x, p.y, p.dir, g.time) });
         list.push({ y: m.y, f: () => {
           if (m.a <= 0.01) return;
-          // frames: 0 crawl/idle, 1-3 attack, 4-5 damage, 6-7 speak
-          const dist = Math.hypot(m.x - p.x, m.y - p.y), tt = g.time;
-          let fr = 0;
-          if (g.dead && g.shock) fr = 3;
-          else if (m.state === 'vanish') fr = m.t < 0.6 ? 4 : 5;
-          else if (m.state === 'freeze') fr = 6 + (Math.floor(tt * 2.5) % 2);
-          else if (m.state === 'search') fr = 6 + (Math.floor(tt * 3) % 2);
-          else if (m.state === 'hunt' && dist < 190) fr = 1 + (Math.floor(tt * 9) % 3);
-          const walking = (m.state === 'wander' || m.state === 'hunt' || m.state === 'search') && m.sv > 6;
-          const ph = m.anim * Math.PI, bob = walking ? Math.abs(Math.sin(ph)) * 4 : 0, lean = walking ? Math.sin(ph) * 0.04 : 0;
-          ctx.save(); ctx.globalAlpha = m.a; ctx.imageSmoothingEnabled = false;
-          ctx.translate(m.x, m.y - bob); ctx.rotate(lean * m.fl); ctx.scale(-m.fl, 1 + (walking ? Math.sin(ph * 2) * 0.02 : 0));
-          ctx.drawImage(imgs!.monster, (fr % 4) * 64, Math.floor(fr / 4) * 64, 64, 64, -40 * MS, -64 * MS, 64 * MS, 64 * MS);
+          const moving = (m.state === 'wander' || m.state === 'hunt' || m.state === 'search') && m.sv > 6;
+          const fr = moving ? Math.floor(m.anim) % 9 : 0;
+          const pd = m.pd; let d8 = m.d8, db = m.db;
+          if (g.dead && g.shock) { d8 = ((Math.round(Math.atan2(p.y - m.y, p.x - m.x) / (Math.PI / 4)) % 8) + 8) % 8; db = 1; } // face the player on the kill
+          ctx.save(); ctx.imageSmoothingEnabled = false;
+          const put = (dir: number, a: number) => { ctx.globalAlpha = m.a * a; ctx.drawImage(imgs!.monster, fr * MC, dir * MC, MC, MC, m.x - 44 * MS, m.y - 82 * MS, MC * MS, MC * MS); };
+          if (db < 1 && pd !== d8) put(pd, 1);
+          put(d8, db < 1 && pd !== d8 ? db : 1);
           ctx.restore();
         } });
       }
