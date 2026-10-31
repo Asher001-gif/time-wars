@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import DraggableExitButton from './DraggableExitButton';
 import { loadWarehouseAssets, WhImages } from '@/game/warehouseAssets';
 
-const WW = 2600, WH = 1800;
+const WW = 3400, WH = 2300;
 const FW = 149, FH = 192, GS = 0.9;
 const KEY = 'warehouse.best';
 type Rect = { x: number; y: number; w: number; h: number };
@@ -11,10 +11,10 @@ type Chest = Rect & { key: boolean; openUntil: number };
 type Crate = Rect;
 type Plate = { x: number; y: number; cd: number };
 type Bat = { x: number; y: number };
-type Mon = { x: number; y: number; state: 'wander' | 'freeze' | 'vanish' | 'gone' | 'hunt' | 'search'; t: number; tx: number; ty: number; a: number; dir: number; anim: number; sawHide: boolean; next: number };
+type Mon = { x: number; y: number; state: 'wander' | 'freeze' | 'vanish' | 'gone' | 'hunt' | 'search'; t: number; tx: number; ty: number; a: number; dir: number; anim: number; sawHide: boolean; next: number; det: number; detT: number; stuck: number };
 interface G {
   obs: Obs[]; chests: Chest[]; crates: Crate[]; plates: Plate[]; bats: Bat[];
-  p: { x: number; y: number; hidden: Crate | null; face: number };
+  p: { x: number; y: number; hidden: Crate | null; face: number; dir: 'up' | 'down' | 'left' | 'right' };
   m: Mon; battery: number; keys: number; time: number; toast: string; toastT: number;
   stepT: number; batT: number; dead: string; noiseFx: { x: number; y: number; t: number }[];
 }
@@ -40,9 +40,9 @@ function build(): G {
   const obs: Obs[] = [], chests: Chest[] = [], crates: Crate[] = [];
   const all: Rect[] = [{ x: WW / 2 - 140, y: WH / 2 - 140, w: 280, h: 280 }]; // clear spawn
   const place = (w: number, h: number): Rect | null => {
-    for (let i = 0; i < 80; i++) {
+    for (let i = 0; i < 200; i++) {
       const r = { x: rnd(80, WW - 80 - w), y: rnd(80, WH - 80 - h), w, h };
-      if (!all.some(o => hit(r, o, 70))) { all.push(r); return r; }
+      if (!all.some(o => hit(r, o, 150))) { all.push(r); return r; }
     }
     return null;
   };
@@ -54,8 +54,8 @@ function build(): G {
   const plates: Plate[] = [];
   for (let i = 0; i < 9; i++) { const r = place(46, 46); if (r) plates.push({ x: r.x + 23, y: r.y + 23, cd: 0 }); all.pop(); }
   return {
-    obs, chests, crates, plates, bats: [], p: { x: WW / 2, y: WH / 2, hidden: null, face: 0 },
-    m: { x: rnd(200, WW - 200), y: rnd(200, 500), state: 'wander', t: 0, tx: WW / 2, ty: WH / 2, a: 1, dir: 1, anim: 0, sawHide: false, next: rnd(6, 10) },
+    obs, chests, crates, plates, bats: [], p: { x: WW / 2, y: WH / 2, hidden: null, face: 0, dir: 'down' },
+    m: { x: rnd(200, WW - 200), y: rnd(200, 500), state: 'wander', t: 0, tx: WW / 2, ty: WH / 2, a: 1, dir: 1, anim: 0, sawHide: false, next: rnd(6, 10), det: 0, detT: 0, stuck: 0 },
     battery: 100, keys: 0, time: 0, toast: '', toastT: 0, stepT: 0, batT: 0, dead: '', noiseFx: [],
   };
 }
@@ -69,14 +69,15 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
   const keys = useRef<Record<string, boolean>>({});
   const act = useRef(false);
   const joy = useRef({ x: 0, y: 0, id: -1, ox: 0, oy: 0 });
-  const runBtn = useRef(false);
+  const runLock = useRef(false);
   const touch = typeof window !== 'undefined' && window.matchMedia?.('(pointer: coarse)').matches;
 
   useEffect(() => {
     const kd = (e: KeyboardEvent) => {
       const k = e.key.toLowerCase();
-      if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(k)) e.preventDefault();
-      if (!keys.current[k] && (k === 'e' || k === ' ')) act.current = true;
+      if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(k)) e.preventDefault();
+      if (!keys.current[k] && k === '5') act.current = true;
+      if (!keys.current[k] && k === '0') runLock.current = !runLock.current;
       keys.current[k] = true;
     };
     const ku = (e: KeyboardEvent) => { keys.current[e.key.toLowerCase()] = false; };
@@ -102,7 +103,15 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
       }
       if (m.state === 'gone' && Math.hypot(m.x - x, m.y - y) < r * 1.6) { m.state = 'hunt'; m.tx = x; m.ty = y; m.t = 0; m.a = 0.2; }
     };
-    const solids = (): Rect[] => [...g.obs, ...g.chests, ...g.crates];
+    const SS: Rect[] = [...g.obs, ...g.chests, ...g.crates]; const solids = () => SS;
+    const mrect = (x: number, y: number): Rect => ({ x: x - 34, y: y - 84, w: 68, h: 84 }); // ghost collides with its legs (bottom half)
+    const blocked = (x: number, y: number) => { const r = mrect(x, y); return SS.some(o => hit(r, o)); };
+    const los = (ax: number, ay: number, bx: number, by: number) => {
+      const n = Math.ceil(Math.hypot(bx - ax, by - ay) / 24);
+      for (let i = 1; i < n; i++) { const x = ax + (bx - ax) * i / n, y = ay + (by - ay) * i / n; if (SS.some(o => x > o.x && x < o.x + o.w && y > o.y && y < o.y + o.h)) return false; }
+      return true;
+    };
+    for (let i = 0; i < 60 && blocked(g.m.x, g.m.y); i++) { g.m.x = rnd(200, WW - 200); g.m.y = rnd(200, WH - 200); }
     const moveP = (dx: number, dy: number) => {
       const p = g.p, R = 14, ss = solids();
       for (const ax of [0, 1]) {
@@ -135,7 +144,8 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
       let iy = (k['s'] || k['arrowdown'] ? 1 : 0) - (k['w'] || k['arrowup'] ? 1 : 0) + joy.current.y;
       const len = Math.hypot(ix, iy); if (len > 1) { ix /= len; iy /= len; }
       const moving = len > 0.1 && !p.hidden;
-      const run = (k['shift'] || runBtn.current) && moving;
+      if (moving) p.dir = Math.abs(ix) > Math.abs(iy) ? (ix > 0 ? 'right' : 'left') : (iy > 0 ? 'down' : 'up');
+      const run = runLock.current && moving;
       g.battery -= (p.hidden ? 0.5 : run ? 1.5 : 0.9) * dt;
       if (g.battery <= 0) { g.battery = 0; die('Your battery ran out.'); return; }
       if (moving) {
@@ -174,7 +184,7 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
           if (cr && dc <= dh) {
             p.hidden = cr; beep(200, 0.1, 'triangle', 0.04);
             const d = Math.hypot(m.x - p.x, m.y - p.y);
-            m.sawHide = m.state !== 'gone' && m.state !== 'vanish' && d < 520 && (m.state === 'hunt' || d < 380);
+            m.sawHide = m.state !== 'gone' && m.state !== 'vanish' && d < 520 && (m.state === 'hunt' || (d < 380 && los(m.x, m.y, p.x, p.y)));
             if (m.sawHide) { m.state = 'hunt'; m.tx = cr.x + cr.w / 2; m.ty = cr.y + cr.h / 2; }
           } else if (ch) {
             ch.openUntil = g.time + 25; noise(ch.x, ch.y, 520); beep(300, 0.25, 'square', 0.06);
@@ -189,40 +199,57 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
       if (p.hidden) { p.x = p.hidden.x + p.hidden.w / 2; p.y = p.hidden.y + p.hidden.h / 2; }
       // monster
       const spd = 130 + Math.min(70, g.time * 0.35);
-      const d = Math.hypot(m.x - p.x, m.y - p.y - 20);
+      const d = Math.hypot(m.x - p.x, m.y - p.y);
       m.t += dt;
       const go = (tx: number, ty: number, sp: number) => {
-        const dx = tx - m.x, dy = ty - m.y, l = Math.hypot(dx, dy) || 1;
-        m.x += dx / l * sp * dt; m.y += dy / l * sp * dt; if (Math.abs(dx) > 4) m.dir = dx > 0 ? 1 : -1; m.anim += sp * dt / 38;
+        const dx = tx - m.x, dy = ty - m.y, l = Math.hypot(dx, dy) || 1, step = sp * dt;
+        let ang = Math.atan2(dy, dx);
+        if (m.detT > 0) { m.detT -= dt; ang += m.det; }
+        const ox = m.x, oy = m.y;
+        if (blocked(m.x, m.y)) { m.x += Math.cos(ang) * step; m.y += Math.sin(ang) * step; }
+        else {
+          const nx = m.x + Math.cos(ang) * step; if (!blocked(nx, m.y)) m.x = nx;
+          const ny = m.y + Math.sin(ang) * step; if (!blocked(m.x, ny)) m.y = ny;
+        }
+        m.x = Math.max(40, Math.min(WW - 40, m.x)); m.y = Math.max(100, Math.min(WH - 10, m.y));
+        const moved = Math.hypot(m.x - ox, m.y - oy);
+        if (moved < step * 0.4 && l > 40) { m.stuck += dt; if (m.detT <= 0) { m.det = (Math.random() < 0.5 ? 1 : -1) * rnd(1.0, 1.9); m.detT = 0.6; } }
+        else m.stuck = Math.max(0, m.stuck - dt);
+        if (Math.abs(m.x - ox) > 0.05) m.dir = m.x - ox > 0 ? 1 : -1;
+        m.anim += moved / 38;
         return l;
       };
+      const pick = () => { for (let i = 0; i < 20; i++) { const tx = rnd(100, WW - 100), ty = rnd(120, WH - 100); if (!blocked(tx, ty)) { m.tx = tx; m.ty = ty; break; } } m.stuck = 0; m.t = 0; };
       const light = 70 + 230 * (g.battery / 100);
-      if ((m.state === 'wander' || m.state === 'search') && !p.hidden && d < Math.min(300, light + 60)) { m.state = 'hunt'; m.tx = p.x; m.ty = p.y; m.t = 0; beep(70, 0.4, 'sawtooth', 0.08); }
+      const sees = !p.hidden && d < Math.min(340, light + 80) && los(m.x, m.y, p.x, p.y);
+      if ((m.state === 'wander' || m.state === 'search') && sees) { m.state = 'hunt'; m.tx = p.x; m.ty = p.y; m.t = 0; beep(70, 0.4, 'sawtooth', 0.08); }
       if (m.state === 'wander') {
         m.a = Math.min(1, m.a + dt * 2);
-        if (go(m.tx, m.ty, 65) < 30 || m.t > 9) { m.tx = rnd(100, WW - 100); m.ty = rnd(100, WH - 100); m.t = 0; if (Math.random() < 0.35) m.tx = p.x + rnd(-500, 500), m.ty = p.y + rnd(-400, 400); }
+        if (go(m.tx, m.ty, 65) < 30 || m.t > 9 || m.stuck > 1.5) pick();
         m.next -= dt; if (m.next <= 0) { m.state = 'freeze'; m.t = 0; }
       } else if (m.state === 'freeze') { if (m.t > 2.8) { m.state = 'vanish'; m.t = 0; } }
-      else if (m.state === 'vanish') { m.a = Math.max(0, 1 - m.t / 1.2); if (m.t > 1.2) { m.state = 'gone'; m.t = 0; } }
+      else if (m.state === 'vanish') { m.a = Math.max(0, 1 - m.t / 1.2); if (m.t > 1.2) { m.state = 'gone'; m.t = 0; m.next = rnd(3, 6); } }
       else if (m.state === 'gone') {
-        m.a = 0; if (m.t > rnd(3, 6)) {
-          const ang = Math.random() * 6.28, r = rnd(650, 1000);
-          m.x = Math.max(60, Math.min(WW - 60, p.x + Math.cos(ang) * r)); m.y = Math.max(60, Math.min(WH - 60, p.y + Math.sin(ang) * r));
-          m.state = 'wander'; m.t = 0; m.next = rnd(7, 13); m.tx = m.x; m.ty = m.y;
+        m.a = 0; if (m.t > m.next) {
+          for (let i = 0; i < 20; i++) {
+            const ang = Math.random() * 6.28, r = rnd(650, 1000);
+            const nx = Math.max(60, Math.min(WW - 60, p.x + Math.cos(ang) * r)), ny = Math.max(110, Math.min(WH - 20, p.y + Math.sin(ang) * r));
+            if (!blocked(nx, ny)) { m.x = nx; m.y = ny; break; }
+          }
+          m.state = 'wander'; m.next = rnd(7, 13); pick();
         }
       } else if (m.state === 'hunt') {
         m.a = Math.min(1, m.a + dt * 3);
-        if (!p.hidden && d < 420) { m.tx = p.x; m.ty = p.y; }
+        if (sees) { m.tx = p.x; m.ty = p.y; m.t = 0; }
         if (go(m.tx, m.ty, spd) < 34) {
           if (p.hidden && m.sawHide) { die('It saw you hide.'); return; }
           m.state = 'search'; m.t = 0; m.sawHide = false;
-        }
+        } else if (m.t > 14 || m.stuck > 2.5) { m.state = 'search'; m.t = 0; m.stuck = 0; }
       } else if (m.state === 'search') {
         m.a = 1; if (m.t % 2 < dt) { m.tx = m.x + rnd(-200, 200); m.ty = m.y + rnd(-200, 200); }
-        go(m.tx, m.ty, 70); if (m.t > 6) { m.state = 'wander'; m.t = 0; m.next = rnd(6, 10); }
+        go(m.tx, m.ty, 70); if (m.t > 6) { m.state = 'wander'; m.t = 0; m.next = rnd(6, 10); pick(); }
       }
-      if (!p.hidden && m.a > 0.5 && m.state !== 'freeze' && d < 36) die('The monster got you.');
-      else if (!p.hidden && m.a > 0.5 && d < 36) die('The monster got you.');
+      if (!p.hidden && m.a > 0.5 && d < 44) die('The monster got you.');
       g.noiseFx.forEach(n => (n.t -= dt)); g.noiseFx = g.noiseFx.filter(n => n.t > 0);
     };
 
@@ -252,7 +279,7 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
         for (const o of g.obs) list.push({ y: o.y + o.h, f: () => ctx.drawImage(imgs![o.img], o.x, o.y, o.w, o.h) });
         for (const c of g.chests) list.push({ y: c.y + c.h, f: () => { const im = c.openUntil ? imgs!.chestOpen : imgs!.chestClosed; const w = c.openUntil ? c.h * 273 / 249 : c.w; ctx.drawImage(im, c.x + (c.w - w) / 2, c.y, w, c.h); } });
         for (const c of g.crates) list.push({ y: c.y + c.h, f: () => { ctx.drawImage(imgs!.crateX, c.x, c.y, c.w, c.h); if (p.hidden === c) { ctx.fillStyle = 'rgba(0,0,0,.35)'; ctx.fillRect(c.x, c.y, c.w, c.h); } } });
-        if (!p.hidden) list.push({ y: p.y + 14, f: () => drawRobot(ctx, p.x, p.y, p.face, g.time) });
+        if (!p.hidden) list.push({ y: p.y + 14, f: () => drawBot(ctx, imgs!, p.x, p.y, p.dir, g.time) });
         list.push({ y: m.y, f: () => {
           if (m.a <= 0.01) return;
           const fr = m.state === 'freeze' || m.state === 'vanish' ? 0 : Math.floor(m.anim) % 6;
@@ -279,6 +306,7 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
       // HUD
       ctx.font = 'bold 16px monospace'; ctx.fillStyle = '#ddd'; ctx.textAlign = 'left';
       ctx.fillText(`TIME ${fmt(g.time)}   KEYS ${g.keys}   SCORE ${scoreOf(g)}`, 70, 30);
+      ctx.fillText(`SPRINT [0]: ${runLock.current ? 'ON' : 'OFF'}`, 70, 78);
       ctx.fillStyle = '#222'; ctx.fillRect(70, 42, 160, 16); ctx.fillStyle = g.battery < 20 ? '#fff' : '#aaa';
       if (g.battery >= 20 || Math.floor(g.time * 4) % 2) ctx.fillRect(72, 44, 156 * g.battery / 100, 12);
       ctx.strokeStyle = '#ddd'; ctx.lineWidth = 2; ctx.strokeRect(70, 42, 160, 16);
@@ -286,9 +314,9 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
       ctx.textAlign = 'center';
       if (g.toastT > 0) { ctx.font = 'bold 20px monospace'; ctx.fillStyle = '#fff'; ctx.fillText(g.toast, W / 2, 80); }
       let prompt = '';
-      if (p.hidden) prompt = 'E: leave box'; else {
+      if (p.hidden) prompt = '5: leave box'; else {
         const cr = nearest(g.crates, 85), ch = nearest(g.chests.filter(c => !c.openUntil), 70);
-        prompt = cr ? 'E: hide' : ch ? 'E: open chest' : '';
+        prompt = cr ? '5: hide' : ch ? '5: open chest' : '';
       }
       if (prompt) { ctx.font = 'bold 16px monospace'; ctx.fillStyle = '#fff'; ctx.fillText(prompt, W / 2, H / 2 + 60); }
       ctx.font = '11px monospace'; ctx.fillStyle = '#888'; ctx.fillText('You can hide inside X crates!', W / 2, H - 10);
@@ -318,8 +346,8 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
       <DraggableExitButton onExit={onExit} />
       {phase === 'play' && touch && (
         <div className="absolute right-4 bottom-6 flex flex-col gap-3">
-          <button className="w-16 h-16 rounded-full bg-white/20 border border-white/50 text-white font-bold" onPointerDown={() => { act.current = true; }}>E</button>
-          <button className="w-16 h-16 rounded-full bg-white/20 border border-white/50 text-white text-xs font-bold" onPointerDown={() => { runBtn.current = true; }} onPointerUp={() => { runBtn.current = false; }} onPointerLeave={() => { runBtn.current = false; }}>RUN</button>
+          <button className="w-16 h-16 rounded-full bg-white/20 border border-white/50 text-white font-bold" onPointerDown={() => { act.current = true; }}>5</button>
+          <button className="w-16 h-16 rounded-full bg-white/20 border border-white/50 text-white text-xs font-bold" onPointerDown={() => { runLock.current = !runLock.current; }}>SPRINT</button>
         </div>
       )}
       {phase !== 'play' && (
@@ -334,7 +362,7 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
           ) : (
             <div className="max-w-md text-sm text-neutral-400 space-y-1">
               <p>Survive. Find keys in chests. Find batteries — your battery is your life and your light.</p>
-              <p>WASD/Arrows move · Shift run (loud) · E open chest / hide</p>
+              <p>WASD/Arrows move · 5 open chest / hide · 0 toggle sprint (loud)</p>
               <p>Hide in X crates. If the monster sees you enter, you're dead. Hidden pressure plates are loud.</p>
             </div>
           )}
@@ -346,11 +374,10 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
   );
 }
 
-function drawRobot(ctx: CanvasRenderingContext2D, x: number, y: number, face: number, t: number) {
-  ctx.fillStyle = 'rgba(0,0,0,.35)'; ctx.beginPath(); ctx.ellipse(x, y + 14, 15, 6, 0, 0, 6.28); ctx.fill();
-  const bob = Math.sin(t * 4) * 1.5;
-  ctx.fillStyle = '#e6e6e6'; ctx.strokeStyle = '#111'; ctx.lineWidth = 2;
-  ctx.beginPath(); ctx.arc(x, y + bob, 15, 0, 6.28); ctx.fill(); ctx.stroke();
-  ctx.fillStyle = '#1a1a1a'; ctx.beginPath(); ctx.ellipse(x + face * 3, y - 2 + bob, 11, 8, 0, 0, 6.28); ctx.fill();
-  ctx.fillStyle = '#ccc'; ctx.beginPath(); ctx.ellipse(x + face * 3 - 4, y - 2 + bob, 2.5, 3.5, 0, 0, 6.28); ctx.ellipse(x + face * 3 + 4, y - 2 + bob, 2.5, 3.5, 0, 0, 6.28); ctx.fill();
+function drawBot(ctx: CanvasRenderingContext2D, im: WhImages, x: number, y: number, dir: string, t: number) {
+  ctx.fillStyle = 'rgba(0,0,0,.35)'; ctx.beginPath(); ctx.ellipse(x, y + 15, 16, 6, 0, 0, 6.28); ctx.fill();
+  const img = dir === 'up' ? im.robotBack : im.robotFront;
+  const h = 50, w = h * img.width / img.height, bob = Math.sin(t * 5) * 1;
+  ctx.save(); ctx.translate(x, y + 17 + bob); if (dir === 'right') ctx.scale(-1, 1);
+  ctx.drawImage(img, -w / 2, -h, w, h); ctx.restore();
 }

@@ -7,9 +7,11 @@ import cSmall from '@/assets/warehouse/container-small.png';
 import crateX from '@/assets/warehouse/crate-x.png';
 import bStripe from '@/assets/warehouse/barrier-striped.png';
 import bPlain from '@/assets/warehouse/barrier-plain.png';
+import robotFront from '@/assets/warehouse/robot-front.png';
+import robotBack from '@/assets/warehouse/robot-back.png';
 import battery from '@/assets/warehouse/battery.png';
 
-const urls = { ghost, chestOpen, chestClosed, cWide, cTall, cSmall, crateX, bStripe, bPlain, battery };
+const urls = { ghost, chestOpen, chestClosed, cWide, cTall, cSmall, crateX, bStripe, bPlain, battery, robotFront, robotBack };
 export type WhKey = keyof typeof urls;
 export type WhImages = Record<WhKey, HTMLImageElement>;
 const imgs = {} as WhImages;
