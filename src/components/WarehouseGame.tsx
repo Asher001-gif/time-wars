@@ -13,7 +13,7 @@ type Chest = Rect & { key: boolean; bat: boolean; openUntil: number };
 type Crate = Rect;
 type Plate = { x: number; y: number; cd: number };
 type Bat = { x: number; y: number };
-type Mon = { x: number; y: number; state: 'wander' | 'freeze' | 'vanish' | 'gone' | 'hunt' | 'search'; t: number; tx: number; ty: number; a: number; dir: number; anim: number; sawHide: boolean; next: number; det: number; detT: number; stuck: number };
+type Mon = { x: number; y: number; state: 'wander' | 'freeze' | 'vanish' | 'gone' | 'hunt' | 'search'; t: number; tx: number; ty: number; a: number; dir: number; anim: number; sawHide: boolean; next: number; det: number; detT: number; stuck: number; vert: boolean };
 interface G {
   walls: Rect[]; decals: Decal[]; obs: Obs[]; chests: Chest[]; crates: Crate[]; plates: Plate[]; bats: Bat[];
   p: { x: number; y: number; hidden: Crate | null; face: number; aim: number; dir: 'up' | 'down' | 'left' | 'right' };
@@ -82,7 +82,7 @@ function build(): G {
   for (let i = 0; i < 18; i++) { const r = place(46, 46); if (r) plates.push({ x: r.x + 23, y: r.y + 23, cd: 0 }); }
   return {
     walls, decals, obs, chests, crates, plates, bats: [], p: { x: 880, y: 1000, hidden: null, face: 0, aim: Math.PI / 2, dir: 'down' },
-    m: { x: rnd(3400, 4600), y: rnd(200, 1800), state: 'wander', t: 0, tx: WW / 2, ty: WH / 2, a: 1, dir: 1, anim: 0, sawHide: false, next: rnd(6, 10), det: 0, detT: 0, stuck: 0 },
+    m: { x: rnd(3400, 4600), y: rnd(200, 1800), state: 'wander', t: 0, tx: WW / 2, ty: WH / 2, a: 1, dir: 1, anim: 0, sawHide: false, next: rnd(6, 10), det: 0, detT: 0, stuck: 0, vert: false },
     battery: 100, keys: 0, time: 0, toast: '', toastT: 0, stepT: 0, batT: 6, dead: '', hbT: 0, gT: 0, shock: false, deadT: 0, noiseFx: [],
   };
 }
@@ -239,6 +239,7 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
         const moved = Math.hypot(m.x - ox, m.y - oy);
         if (moved < step * 0.4 && l > 40) { m.stuck += dt; if (m.detT <= 0) { m.det = (Math.random() < 0.5 ? 1 : -1) * rnd(1.0, 1.9); m.detT = 0.6; } }
         else m.stuck = Math.max(0, m.stuck - dt);
+        if (moved > 0.05) m.vert = Math.abs(m.y - oy) > Math.abs(m.x - ox);
         if (Math.abs(m.x - ox) > 0.05) m.dir = m.x - ox > 0 ? 1 : -1;
         m.anim += moved / 38;
         return l;
@@ -318,6 +319,10 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
           if (m.a <= 0.01) return;
           const fr = m.state === 'freeze' || m.state === 'vanish' ? 0 : Math.floor(m.anim) % 6;
           ctx.globalAlpha = m.a;
+          if (m.vert) { // moving up/down: front-facing crawl sheet (3 cols x 2 rows)
+            const cw = 286, ch = 243, sc = 0.65;
+            ctx.drawImage(imgs!.ghostFront, (fr % 3) * cw, Math.floor(fr / 3) * ch, cw, ch, m.x - cw * sc / 2, m.y - ch * sc, cw * sc, ch * sc);
+          } else
           ctx.drawImage(imgs!.ghost, fr * FW, (m.dir > 0 ? 0 : 1) * FH, FW, FH, m.x - FW * GS / 2, m.y - FH * GS, FW * GS, FH * GS);
           ctx.globalAlpha = 1;
         } });
