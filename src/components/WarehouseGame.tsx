@@ -108,8 +108,9 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
       keys.current[k] = true;
     };
     const ku = (e: KeyboardEvent) => { keys.current[e.key.toLowerCase()] = false; };
-    window.addEventListener('keydown', kd); window.addEventListener('keyup', ku);
-    return () => { window.removeEventListener('keydown', kd); window.removeEventListener('keyup', ku); };
+    const clr = () => { keys.current = {}; }; // lost keyup (alt-tab etc.) would leave a key 'held' forever, so '5' could never fire again
+    window.addEventListener('keydown', kd); window.addEventListener('keyup', ku); window.addEventListener('blur', clr);
+    return () => { window.removeEventListener('keydown', kd); window.removeEventListener('keyup', ku); window.removeEventListener('blur', clr); };
   }, []);
 
   useEffect(() => {
@@ -205,6 +206,7 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
       // string-pull: skip every waypoint we can see past, so it walks the shortest straight lines
       const out: { x: number; y: number }[] = []; let i = 0;
       while (i < pts.length - 1) { let j = pts.length - 1; while (j > i + 1 && !segClear(pts[i].x, pts[i].y, pts[j].x, pts[j].y)) j--; out.push(pts[j]); i = j; }
+      if (!out.length) return null; // start and (snapped) goal are the same cell, e.g. target inside a solid crate: an empty path used to crash go() and kill the game loop
       return out;
     };
     // start: the monster appears somewhere random, a little way from where you spawn (never on top of you)
@@ -325,6 +327,7 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
           m.path = findPath(m.x, m.y, tx, ty); m.pi = 0; m.ptx = tx; m.pty = ty; m.rp = m.path ? 0.6 : 1.5; // failed search: wait before retrying
         }
         let wx = tx, wy = ty;
+        if (m.path && !m.path.length) m.path = null;
         if (m.path) {
           while (m.pi < m.path.length - 1 && Math.hypot(m.path[m.pi].x - m.x, m.path[m.pi].y - m.y) < 26) m.pi++;
           const wp = m.path[Math.min(m.pi, m.path.length - 1)]; wx = wp.x; wy = wp.y;
@@ -526,9 +529,11 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
 
     const loop = (t: number) => {
       if (!alive) return;
-      const dt = Math.min(0.05, (t - last) / 1000); last = t;
+      const dt = Math.max(0.001, Math.min(0.05, (t - last) / 1000)); last = t;
       if (g.dead) g.deadT += dt;
-      if (imgs) update(dt); draw(); raf = requestAnimationFrame(loop);
+      try { if (imgs) update(dt); } catch (e) { console.error('warehouse update error', e); }
+      try { draw(); } catch (e) { console.error('warehouse draw error', e); }
+      raf = requestAnimationFrame(loop);
     };
     raf = requestAnimationFrame(loop);
     return () => { alive = false; drone?.stop(); cancelAnimationFrame(raf); window.removeEventListener('resize', resize); };
