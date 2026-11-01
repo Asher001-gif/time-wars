@@ -278,7 +278,19 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
       for (const c of g.chests) if (c.openUntil && c.openUntil < g.time) c.openUntil = 0;
       if (act.current) {
         act.current = false;
-        if (p.hidden) { p.x = p.hidden.x + p.hidden.w / 2; p.y = p.hidden.y + p.hidden.h + 22; p.hidden = null; m.sawHide = false; }
+        if (p.hidden) {
+          // pick a spot around the crate where the player isn't inside a wall/obstacle (otherwise moveP can never push them out = stuck forever)
+          const c = p.hidden, R = 14, cxm = c.x + c.w / 2, cym = c.y + c.h / 2;
+          const spotFree = (x: number, y: number) => x > R && y > R && x < WW - R && y < WH - R && !solids().some(o => o !== c && Math.hypot(x - Math.max(o.x, Math.min(x, o.x + o.w)), y - Math.max(o.y, Math.min(y, o.y + o.h))) < R + 1);
+          let spot: { x: number; y: number } | null = null;
+          for (const off of [22, 34, 50, 70]) {
+            const cands = [[cxm, c.y + c.h + off], [cxm, c.y - off], [c.x - off, cym], [c.x + c.w + off, cym], [c.x - off, c.y + c.h + off], [c.x + c.w + off, c.y + c.h + off], [c.x - off, c.y - off], [c.x + c.w + off, c.y - off]];
+            for (const [x, y] of cands) if (spotFree(x, y)) { spot = { x, y }; break; }
+            if (spot) break;
+          }
+          if (spot) { p.x = spot.x; p.y = spot.y; p.hidden = null; m.sawHide = false; }
+          else toast('No room to leave the box!');
+        }
         else {
           const cr = nearest(g.crates, 85);
           const ch = nearest(g.chests.filter(c => !c.openUntil), 70);
@@ -307,8 +319,10 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
         const l = Math.hypot(tx - m.x, ty - m.y) || 1, step = sp * dt;
         // plan a collision-free shortest route (A*) and steer along its waypoints
         m.rp -= dt;
-        if (m.ptx < 0 || Math.hypot(m.ptx - tx, m.pty - ty) > 50 || m.rp <= 0 || m.stuck > 0.4) {
-          m.path = findPath(m.x, m.y, tx, ty); m.pi = 0; m.ptx = tx; m.pty = ty; m.rp = m.path ? 0.6 : 1.5; // failed search: wait before retrying (was every frame -> lag/freeze) if (m.stuck > 0.4) m.stuck = 0.2;
+        // replan only on a timer (rp) or when the target moved. NOTE: never trigger on m.stuck here - a monster that can't get closer
+        // (e.g. hunting a player hidden inside a solid crate) stays 'stuck', which re-ran A* every single frame and froze the game.
+        if (m.ptx < 0 || Math.hypot(m.ptx - tx, m.pty - ty) > 50 || m.rp <= 0) {
+          m.path = findPath(m.x, m.y, tx, ty); m.pi = 0; m.ptx = tx; m.pty = ty; m.rp = m.path ? 0.6 : 1.5; // failed search: wait before retrying
         }
         let wx = tx, wy = ty;
         if (m.path) {
@@ -383,7 +397,11 @@ export default function WarehouseGame({ onExit }: { onExit: () => void }) {
       } else if (m.state === 'hunt') {
         m.a = Math.min(1, m.a + dt * 3);
         if (sees) { m.tx = p.x; m.ty = p.y; m.t = 0; }
-        if (go(m.tx, m.ty, spd) < 34) {
+        const hl = go(m.tx, m.ty, spd);
+        const hc = p.hidden;
+        // the crate is solid, so the monster can never reach its centre: count touching the crate's edge as arriving
+        const atCrate = !!hc && m.sawHide && Math.hypot(m.x - Math.max(hc.x, Math.min(m.x, hc.x + hc.w)), (m.y - 40) - Math.max(hc.y, Math.min(m.y - 40, hc.y + hc.h))) < 60;
+        if (hl < 34 || atCrate) {
           if (p.hidden && m.sawHide) { die('It saw you hide.', true); return; }
           m.state = 'search'; m.t = 0; m.sawHide = false;
         } else if (m.t > 14 || m.stuck > 2.5) { m.state = 'search'; m.t = 0; m.stuck = 0; }
