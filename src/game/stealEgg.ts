@@ -169,3 +169,18 @@ export function makeDeco(nests: NestDef[]): { tufts: Deco[]; flowers: Deco[]; tr
   };
   return { tufts: make(520, 60), flowers: make(150, 60), trees: make(42, 200) };
 }
+
+/* ---------- dirt pits: slow you down while you stand in them ---------- */
+export const PIT_SLOW = 0.5;          // speed multiplier inside a pit
+export const PIT_SQUASH = 0.55;       // pits are flat ovals in the top-down view
+export interface Pit { x: number; y: number; r: number }
+export function makePits(nests: NestDef[]): Pit[] {
+  const r = rng(31); const out: Pit[] = [];
+  let guard = 0;
+  while (out.length < 16 && guard++ < 800) {
+    const x = 1300 + r() * 2150, y = 150 + r() * (WORLD_H - 300), rad = 36 + r() * 22;
+    if (nests.every(n => Math.hypot(n.x - x, n.y - y) > 170) && out.every(o => Math.hypot(o.x - x, o.y - y) > 140)) out.push({ x, y, r: rad });
+  }
+  return out;
+}
+export const inPit = (pits: Pit[], x: number, y: number) => pits.some(p => ((x - p.x) / p.r) ** 2 + ((y - p.y) / (p.r * PIT_SQUASH)) ** 2 < 1);

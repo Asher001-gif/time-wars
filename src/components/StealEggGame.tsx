@@ -6,7 +6,7 @@ import { botImg, eggImgs, eggVariantCount, preloadStealEgg, SHEET, sheetImgs } f
 import {
   BASE_SPEED, CYCLE_LEN, DAY_LEN, MAX_PET_LEVEL, NIGHT_HATCH_MULT, PAY_INTERVAL, PLAYER_SIZE, SHOP, SPECIES, SPECIES_BY_TIER, TIERS, TIER_INFO,
   WORLD_H, WORLD_W, clearSave, hatchTime, loadSave, makeDeco, makeNests, newSave, petRate, petSellPrice, petSpeed, plotLayout, shopCost, shopLevel,
-  treadRate, weightPenalty, writeSave,
+  treadRate, weightPenalty, writeSave, makePits, inPit, PIT_SLOW, PIT_SQUASH, type Pit,
   type Pet, type PlotLayout, type Rect, type Save, type ShopKey, type Species, type Tier,
 } from '@/game/stealEgg';
 
@@ -98,7 +98,8 @@ interface GameData {
   save: Save;
   nests: Nest[];
   deco: ReturnType<typeof makeDeco>;
-  player: { x: number; y: number; face: number; stun: number; moving: boolean; onTread: boolean; sprint: boolean; sprintLock: boolean };
+  pits: Pit[];
+  player: { x: number; y: number; face: number; stun: number; moving: boolean; onTread: boolean; inPit: boolean; sprint: boolean; sprintLock: boolean };
   carry: Carry | null;
   cycleT: number; t: number; wasNight: boolean;
   payT: number[]; popups: Popup[];
@@ -112,8 +113,8 @@ function createData(): GameData {
   const lay = plotLayout(save);
   const nests = buildNests();
   return {
-    save, nests, deco: makeDeco(nests.map(n => ({ x: n.x, y: n.y, tier: n.tier }))),
-    player: { x: lay.spawn.x, y: lay.spawn.y, face: 1, stun: 0, moving: false, onTread: false, sprint: false, sprintLock: false },
+    save, nests, deco: makeDeco(nests.map(n => ({ x: n.x, y: n.y, tier: n.tier }))), pits: makePits(nests.map(n => ({ x: n.x, y: n.y, tier: n.tier }))),
+    player: { x: lay.spawn.x, y: lay.spawn.y, face: 1, stun: 0, moving: false, onTread: false, inPit: false, sprint: false, sprintLock: false },
     carry: save.carry ? { kind: 'pet', pet: save.carry.pet } : null,
     cycleT: 0, t: 0, wasNight: false,
     payT: Array.from({ length: 200 }, (_, i) => (i * 0.37) % PAY_INTERVAL), popups: [], saveT: 0, flash: 0, lastPrompt: '', nightMsg: 0, tip: 0,
@@ -128,6 +129,7 @@ function effSpeed(g: GameData): number {
   for (let i = 0; i < lay.penPos.length; i++) { const p = s.pen[i]; if (p) v += petSpeed(p); }
   if (g.carry && g.carry.kind === 'egg') v *= 1 - weightPenalty(SPECIES[g.carry.sp].tier, s.armsLv);   // rarer egg = slower
   v = Math.max(40, v);
+  if (g.player.inPit) v *= PIT_SLOW;                              // stuck in a dirt pit
   return g.player.sprint ? Math.max(30, v * SPRINT_SLOW) : v;
 }
 const petBonusSpeed = (g: GameData) => { const s = g.save, lay = plotLayout(s); let v = s.speed; for (let i = 0; i < lay.penPos.length; i++) { const p = s.pen[i]; if (p) v += petSpeed(p); } return v; };
@@ -277,6 +279,8 @@ function update(g: GameData, dt: number, inp: Input, lay: PlotLayout, openShop: 
   const ml = Math.hypot(mx, my);
   if (ml > 1) { mx /= ml; my /= ml; }
   if (p.stun > 0) { p.stun -= dt; mx = my = 0; }
+  const wasInPit = p.inPit; p.inPit = inPit(g.pits, p.x, p.y);
+  if (p.inPit && !wasInPit) burst(g, p.x, p.y, ['#6b4a2b', '#8b5a2b', '#4a3220'], 10, 110, { up: 80, size: 4 });
   const sp = effSpeed(g);
   p.moving = ml > 0.05;
   p.x = Math.min(WORLD_W - 30, Math.max(30, p.x + mx * sp * dt));
@@ -419,6 +423,15 @@ function drawTree(ctx: CanvasRenderingContext2D, x: number, y: number, v: number
   ctx.fillStyle = 'rgba(255,255,255,0.1)'; ctx.beginPath(); ctx.arc(x - 12 * s, y - 104 * s, 20 * s, 0, Math.PI * 2); ctx.fill();
 }
 
+function drawPit(ctx: CanvasRenderingContext2D, pt: Pit) {
+  const ry = pt.r * PIT_SQUASH;
+  ctx.fillStyle = '#6b4a2b'; ctx.beginPath(); ctx.ellipse(pt.x, pt.y, pt.r * 1.12, ry * 1.15, 0, 0, Math.PI * 2); ctx.fill();   // raised rim
+  ctx.fillStyle = '#4a3220'; ctx.beginPath(); ctx.ellipse(pt.x, pt.y + 2, pt.r, ry, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#3a2718'; ctx.beginPath(); ctx.ellipse(pt.x + pt.r * 0.08, pt.y + ry * 0.2, pt.r * 0.72, ry * 0.7, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,0.08)'; ctx.beginPath(); ctx.ellipse(pt.x - pt.r * 0.3, pt.y - ry * 0.25, pt.r * 0.25, ry * 0.16, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#8a6a48'; for (let i = 0; i < 5; i++) { const a = i * 1.9 + pt.x; ctx.beginPath(); ctx.arc(pt.x + Math.cos(a) * pt.r * 1.15, pt.y + Math.sin(a) * ry * 1.2, 3, 0, Math.PI * 2); ctx.fill(); }   // pebbles
+}
+
 function drawPlot(ctx: CanvasRenderingContext2D, g: GameData, lay: PlotLayout, now: number) {
   const s = g.save, r = lay.rect;
   dropShadow(ctx, r.x, r.y, r.w, r.h, 18, 0.3);
@@ -551,6 +564,7 @@ function render(ctx: CanvasRenderingContext2D, g: GameData, cw: number, ch: numb
   const fcols = ['#ffd84a', '#ff7a9a', '#ffffff', '#b58cff'];
   for (const d of g.deco.flowers) if (vis(d.x, d.y, 20)) { ctx.fillStyle = fcols[Math.floor(d.v * 4)]; ctx.beginPath(); ctx.arc(d.x, d.y, 4, 0, Math.PI * 2); ctx.fill(); ctx.fillStyle = '#ff9a1a'; ctx.beginPath(); ctx.arc(d.x, d.y, 1.6, 0, Math.PI * 2); ctx.fill(); }
 
+  for (const pt of g.pits) if (vis(pt.x, pt.y, pt.r)) drawPit(ctx, pt);
   drawPlot(ctx, g, lay, now);
   const pSpeed = petBonusSpeed(g);
   g.nests.forEach(n => { if (vis(n.x, n.y)) drawNest(ctx, g, n, now, pSpeed); });
@@ -617,6 +631,7 @@ function drawHud(ctx: CanvasRenderingContext2D, g: GameData, cw: number, ch: num
   ctx.fillStyle = 'rgba(0,0,0,0.6)'; rrect(ctx, 12, 54, 210, 70, 10); ctx.fill();
   ctx.save(); ctx.translate(24, 82); ctx.scale(1 + 0.3 * g.cashPulse, 1 + 0.3 * g.cashPulse); ctx.font = 'bold 22px monospace'; ctx.fillStyle = g.cashPulse > 0.3 ? '#eaffef' : '#7dff9a'; ctx.fillText(fmtMoney(s.cash), 0, 0); ctx.restore();
   ctx.font = 'bold 14px monospace'; ctx.fillStyle = '#fff'; ctx.fillText(`⚡ SPEED ${Math.round(sp)}`, 24, 104);
+  if (g.player.inPit) { ctx.save(); ctx.font = 'bold 12px monospace'; ctx.fillStyle = '#d9a066'; ctx.fillText('stuck in dirt: −50% speed', 24, 142); ctx.restore(); }
   const c = g.carry;
   if (c && c.kind === 'egg') { const w = weightPenalty(SPECIES[c.sp].tier, s.armsLv); ctx.fillStyle = '#ffb36b'; ctx.fillText(`carrying egg −${Math.round(w * 100)}% speed`, 24, 120); }
   else if (c && c.kind === 'pet') { ctx.fillStyle = '#ffe14a'; ctx.fillText(`carrying ${petLabel(c.pet)}`, 24, 120); }
