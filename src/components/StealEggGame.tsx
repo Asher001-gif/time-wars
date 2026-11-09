@@ -126,7 +126,7 @@ function effSpeed(g: GameData): number {
   const lay = plotLayout(s);
   let v = s.speed;
   for (let i = 0; i < lay.penPos.length; i++) { const p = s.pen[i]; if (p) v += petSpeed(p); }
-  if (g.carry && g.carry.kind === 'egg') v -= weightPenalty(SPECIES[g.carry.sp].tier, s.armsLv);
+  if (g.carry && g.carry.kind === 'egg') v *= 1 - weightPenalty(SPECIES[g.carry.sp].tier, s.armsLv);   // rarer egg = slower
   v = Math.max(40, v);
   return g.player.sprint ? Math.max(30, v * SPRINT_SLOW) : v;
 }
@@ -193,7 +193,7 @@ function updateGuard(g: GameData, n: Nest, dt: number, lay: PlotLayout) {
     }
     case 'alert': { gd.moving = false; if (gd.timer <= 0) gd.state = 'chase'; break; }
     case 'chase': {
-      if (!canSee || dP > noticeOf(gd.kind) * 2.3 || Math.hypot(gd.x - gd.hx, gd.y - gd.hy) > 950) { gd.state = 'return'; break; }
+      if (!canSee) { gd.state = 'return'; break; }      // a guard never gives up until you are inside your home (or knocked out)
       moveGuard(gd, p.x, p.y, speed, dt, lay);
       if (dP < 36) { knockOut(g, lay); gd.state = 'hit'; gd.timer = 1.3; gd.moving = false; }
       break;
@@ -488,7 +488,7 @@ function drawNest(ctx: CanvasRenderingContext2D, g: GameData, n: Nest, now: numb
     ctx.strokeStyle = info.color; ctx.lineWidth = 3; ctx.globalAlpha = 0.5 + Math.sin(now * 0.005 + n.x) * 0.25;
     ctx.beginPath(); ctx.ellipse(n.x, n.y + 10, 42, 19, 0, 0, Math.PI * 2); ctx.stroke(); ctx.globalAlpha = 1;
     drawEgg(ctx, n.egg, n.eggV, n.x, n.y + 14, info.eggH, Math.sin(now * 0.004 + n.x) * 0.03, 1, n.y + 15);
-    const need = Math.ceil(info.guardSpeed + info.weight);
+    const need = Math.ceil(info.guardSpeed / (1 - info.weight * (1 - 0.15 * g.save.armsLv)));
     label(ctx, `${info.label} · need ⚡${need}`, n.x, n.y + 44, 12, pSpeed >= need ? '#9dffb4' : '#ff8a8a');
   } else {
     label(ctx, `back in ${fmtTime(CYCLE_LEN - g.cycleT)}`, n.x, n.y + 44, 11, '#ddd');
@@ -618,7 +618,7 @@ function drawHud(ctx: CanvasRenderingContext2D, g: GameData, cw: number, ch: num
   ctx.save(); ctx.translate(24, 82); ctx.scale(1 + 0.3 * g.cashPulse, 1 + 0.3 * g.cashPulse); ctx.font = 'bold 22px monospace'; ctx.fillStyle = g.cashPulse > 0.3 ? '#eaffef' : '#7dff9a'; ctx.fillText(fmtMoney(s.cash), 0, 0); ctx.restore();
   ctx.font = 'bold 14px monospace'; ctx.fillStyle = '#fff'; ctx.fillText(`⚡ SPEED ${Math.round(sp)}`, 24, 104);
   const c = g.carry;
-  if (c && c.kind === 'egg') { const w = weightPenalty(SPECIES[c.sp].tier, s.armsLv); ctx.fillStyle = '#ffb36b'; ctx.fillText(`carrying egg −${Math.round(w)}`, 24, 120); }
+  if (c && c.kind === 'egg') { const w = weightPenalty(SPECIES[c.sp].tier, s.armsLv); ctx.fillStyle = '#ffb36b'; ctx.fillText(`carrying egg −${Math.round(w * 100)}% speed`, 24, 120); }
   else if (c && c.kind === 'pet') { ctx.fillStyle = '#ffe14a'; ctx.fillText(`carrying ${petLabel(c.pet)}`, 24, 120); }
   // clock
   const left = night ? CYCLE_LEN - g.cycleT : DAY_LEN - g.cycleT;

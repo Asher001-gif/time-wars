@@ -11,14 +11,14 @@ export const TIERS: Tier[] = ['common', 'uncommon', 'rare', 'epic'];
 export const TIER_INFO: Record<Tier, {
   label: string; color: string; hatch: number;      // hatch time in seconds
   guard: 'dog' | 'wolf'; guardSpeed: number;          // px/s while chasing = the nest's recommended speed
-  weight: number;                                      // px/s taken off your speed while carrying this egg
+  weight: number;                                      // fraction of your speed lost while carrying this egg (rarer egg = heavier)
   eggH: number;                                        // drawn egg height in px
   speedBonus: number;                                  // px/s a pet of this tier adds while in the pen
 }> = {
-  common:   { label: 'Common',   color: '#e8e8e8', hatch: 10,  guard: 'dog',  guardSpeed: 150, weight: 8,  eggH: 38, speedBonus: 1 },
-  uncommon: { label: 'Uncommon', color: '#58d46a', hatch: 30,  guard: 'dog',  guardSpeed: 190, weight: 22, eggH: 54, speedBonus: 2 },
-  rare:     { label: 'Rare',     color: '#4aa8ff', hatch: 90,  guard: 'wolf', guardSpeed: 250, weight: 45, eggH: 72, speedBonus: 4 },
-  epic:     { label: 'Epic',     color: '#b565ff', hatch: 300, guard: 'wolf', guardSpeed: 300, weight: 80, eggH: 92, speedBonus: 8 },
+  common:   { label: 'Common',   color: '#e8e8e8', hatch: 10,  guard: 'dog',  guardSpeed: 150, weight: 0.08,  eggH: 38, speedBonus: 1 },
+  uncommon: { label: 'Uncommon', color: '#58d46a', hatch: 30,  guard: 'dog',  guardSpeed: 190, weight: 0.18, eggH: 54, speedBonus: 2 },
+  rare:     { label: 'Rare',     color: '#4aa8ff', hatch: 90,  guard: 'wolf', guardSpeed: 250, weight: 0.32, eggH: 72, speedBonus: 4 },
+  epic:     { label: 'Epic',     color: '#b565ff', hatch: 300, guard: 'wolf', guardSpeed: 300, weight: 0.45, eggH: 92, speedBonus: 8 },
 };
 
 export const SPECIES: Record<Species, { name: string; tier: Tier; rate: number; size: number }> = {
@@ -74,6 +74,7 @@ export const SHOP: Record<ShopKey, { name: string; desc: string; costs: number[]
 export const shopLevel = (s: Save, k: ShopKey) => ({ plot: s.plotLv, tread: s.treadLv, arms: s.armsLv, slot: s.extraSlots, pen: s.penUpg })[k];
 export const shopCost = (s: Save, k: ShopKey): number | null => SHOP[k].costs[shopLevel(s, k)] ?? null;
 export const treadRate = (s: Save) => TREAD_RATES[s.treadLv];
+/** fraction of speed lost while carrying an egg of this tier (Strong arms upgrades cut it by 15% per level) */
 export const weightPenalty = (tier: Tier, armsLv: number) => TIER_INFO[tier].weight * (1 - 0.15 * armsLv);
 
 /* ---------- base plot layout (world coords) ---------- */
