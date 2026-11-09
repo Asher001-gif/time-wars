@@ -15,6 +15,7 @@ type Carry = { kind: 'egg'; sp: Species; v: number; nest: number } | { kind: 'pe
 type GState = 'patrol' | 'alert' | 'chase' | 'return' | 'hit';
 interface Guard { x: number; y: number; hx: number; hy: number; kind: Species; state: GState; tx: number; ty: number; wait: number; face: number; timer: number; moving: boolean }
 interface Nest { x: number; y: number; tier: Tier; egg: Species | null; eggV: number; guard: Guard }
+interface Particle { x: number; y: number; vx: number; vy: number; life: number; max: number; size: number; color: string; grav: number; kind: 'dot' | 'coin' | 'ring' | 'star' }
 interface Popup { x: number; y: number; text: string; color: string; life: number }
 interface Cand { x: number; y: number; label: string; run: () => void }
 
@@ -90,6 +91,7 @@ interface GameData {
   payT: number[]; popups: Popup[];
   saveT: number; flash: number; lastPrompt: string;
   nightMsg: number; tip: number;
+  parts: Particle[]; shake: number; cashPulse: number; lastCash: number; slotPop: Record<number, number>; carryPop: number; prevCarry: Carry | null;
 }
 
 function createData(): GameData {
@@ -102,6 +104,7 @@ function createData(): GameData {
     carry: save.carry ? { kind: 'pet', pet: save.carry.pet } : null,
     cycleT: 0, t: 0, wasNight: false,
     payT: Array.from({ length: 200 }, (_, i) => (i * 0.37) % PAY_INTERVAL), popups: [], saveT: 0, flash: 0, lastPrompt: '', nightMsg: 0, tip: 0,
+    parts: [], shake: 0, cashPulse: 0, lastCash: save.cash, slotPop: {}, carryPop: 0, prevCarry: null,
   };
 }
 
@@ -115,6 +118,19 @@ function effSpeed(g: GameData): number {
 }
 const petBonusSpeed = (g: GameData) => { const s = g.save, lay = plotLayout(s); let v = s.speed; for (let i = 0; i < lay.penPos.length; i++) { const p = s.pen[i]; if (p) v += petSpeed(p); } return v; };
 
+/* ---------- game feel: particles, rings, screen shake ---------- */
+const TIER_FX: Record<Tier, string[]> = { common: ['#ffffff', '#e8e8e8'], uncommon: ['#58d46a', '#c8ffd0'], rare: ['#4aa8ff', '#bfe0ff'], epic: ['#b565ff', '#ffd6ff'] };
+function burst(g: GameData, x: number, y: number, colors: string[], n: number, speed = 160, o: { grav?: number; up?: number; size?: number; kind?: Particle['kind'] } = {}) {
+  for (let i = 0; i < n && g.parts.length < 400; i++) {
+    const a = Math.random() * Math.PI * 2, v = speed * (0.35 + Math.random() * 0.65);
+    const life = 0.45 + Math.random() * 0.5;
+    g.parts.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v - (o.up ?? 0), life, max: life, size: (o.size ?? 5) * (0.6 + Math.random() * 0.8), color: colors[i % colors.length], grav: o.grav ?? 380, kind: o.kind ?? 'dot' });
+  }
+}
+function ring(g: GameData, x: number, y: number, color: string, r = 60) {
+  g.parts.push({ x, y, vx: 0, vy: 0, life: 0.4, max: 0.4, size: r, color, grav: 0, kind: 'ring' });
+}
+const shakeIt = (g: GameData, a: number) => { g.shake = Math.min(1, Math.max(g.shake, a)); };
 function popup(g: GameData, x: number, y: number, text: string, color = '#fff') { g.popups.push({ x, y, text, color, life: 1.4 }); }
 
 function resetEggs(g: GameData) {
@@ -126,6 +142,7 @@ function knockOut(g: GameData, lay: PlotLayout) {
   if (c && c.kind === 'egg') { const n = g.nests[c.nest]; if (n && !n.egg) { n.egg = c.sp; n.eggV = c.v; } g.carry = null; }
   g.player.x = lay.spawn.x; g.player.y = lay.spawn.y; g.player.stun = 2.4; g.flash = 1;
   sfx.hit();
+  burst(g, g.player.x, g.player.y - 40, ['#ff4a4a', '#ffb0b0', '#ffffff'], 24, 260, { up: 100 }); shakeIt(g, 0.9);
 }
 
 /* ============================== simulation ============================== */
@@ -182,25 +199,25 @@ function buildCands(g: GameData, lay: PlotLayout, openShop: () => void): Cand[] 
   g.nests.forEach((n, i) => {
     if (n.egg && !c) out.push({
       x: n.x, y: n.y, label: `Steal ${SPECIES[n.egg].name} egg`,
-      run: () => { const sp = n.egg!; g.carry = { kind: 'egg', sp, v: n.eggV, nest: i }; n.egg = null; n.guard.state = 'chase'; sfx.grab(); sfx.bark(); popup(g, n.x, n.y - 80, 'Run!', '#ff8a5a'); },
+      run: () => { const sp = n.egg!; g.carry = { kind: 'egg', sp, v: n.eggV, nest: i }; n.egg = null; n.guard.state = 'chase'; sfx.grab(); sfx.bark(); popup(g, n.x, n.y - 80, 'Run!', '#ff8a5a'); burst(g, n.x, n.y - 20, TIER_FX[n.tier], 18, 200, { up: 120 }); ring(g, n.x, n.y + 6, TIER_FX[n.tier][0], 70); shakeIt(g, 0.3); },
     });
   });
   // hatch slots
   lay.hatchPos.forEach((pos, i) => {
     const slot = s.hatch[i] ?? null;
     if (!slot && c && c.kind === 'egg') {
-      out.push({ ...pos, label: `Place ${SPECIES[c.sp].name} egg`, run: () => { s.hatch[i] = { sp: c.sp, t: 0, v: c.v }; g.carry = null; sfx.place(); } });
+      out.push({ ...pos, label: `Place ${SPECIES[c.sp].name} egg`, run: () => { s.hatch[i] = { sp: c.sp, t: 0, v: c.v }; g.carry = null; sfx.place(); g.slotPop[i] = 0.35; burst(g, pos.x, pos.y + 6, ['#e6c777', '#fff3c4'], 10, 110, { grav: 200 }); } });
     } else if (slot && slot.t >= hatchTime(slot.sp) && c && c.kind === 'egg') {
       // hatched animal waiting + holding an egg: swap them (egg goes in to hatch, animal comes out)
-      out.push({ ...pos, label: `Swap: place ${SPECIES[c.sp].name} egg, take ${SPECIES[slot.sp].name}`, run: () => { g.carry = { kind: 'pet', pet: { sp: slot.sp, lv: 1 } }; s.hatch[i] = { sp: c.sp, t: 0, v: c.v }; sfx.place(); } });
+      out.push({ ...pos, label: `Swap: place ${SPECIES[c.sp].name} egg, take ${SPECIES[slot.sp].name}`, run: () => { g.carry = { kind: 'pet', pet: { sp: slot.sp, lv: 1 } }; s.hatch[i] = { sp: c.sp, t: 0, v: c.v }; sfx.place(); g.slotPop[i] = 0.35; burst(g, pos.x, pos.y - 10, ['#ffe14a', '#fff3c4'], 16, 170, { up: 80 }); ring(g, pos.x, pos.y + 6, '#ffe14a', 60); } });
     } else if (slot && slot.t >= hatchTime(slot.sp) && !c) {
-      out.push({ ...pos, label: `Take ${SPECIES[slot.sp].name}`, run: () => { g.carry = { kind: 'pet', pet: { sp: slot.sp, lv: 1 } }; s.hatch[i] = null; sfx.grab(); } });
+      out.push({ ...pos, label: `Take ${SPECIES[slot.sp].name}`, run: () => { g.carry = { kind: 'pet', pet: { sp: slot.sp, lv: 1 } }; s.hatch[i] = null; sfx.grab(); burst(g, pos.x, pos.y - 20, ['#ffe14a', '#ffffff'], 14, 150, { up: 90 }); } });
     }
   });
   // pen spots
   lay.penPos.forEach((pos, i) => {
     const pet = s.pen[i] ?? null;
-    if (!pet && c && c.kind === 'pet') out.push({ ...pos, label: `Place ${petLabel(c.pet)}`, run: () => { s.pen[i] = c.pet; g.carry = null; sfx.place(); } });
+    if (!pet && c && c.kind === 'pet') out.push({ ...pos, label: `Place ${petLabel(c.pet)}`, run: () => { s.pen[i] = c.pet; g.carry = null; sfx.place(); burst(g, pos.x, pos.y + 10, ['#7dff9a', '#d4ffdc'], 12, 130, { up: 60 }); ring(g, pos.x, pos.y + 18, '#7dff9a', 46); } });
     else if (pet && !c) out.push({ ...pos, label: `Pick up ${petLabel(pet)}`, run: () => { g.carry = { kind: 'pet', pet }; s.pen[i] = null; sfx.grab(); } });
     else if (pet && c && c.kind === 'pet') out.push({ ...pos, label: `Swap with ${petLabel(pet)}`, run: () => { s.pen[i] = c.pet; g.carry = { kind: 'pet', pet }; sfx.place(); } });
   });
@@ -208,7 +225,7 @@ function buildCands(g: GameData, lay: PlotLayout, openShop: () => void): Cand[] 
   // sell stand
   if (c && c.kind === 'pet') {
     const price = petSellPrice(c.pet), m = mid(lay.sell);
-    out.push({ ...m, label: `Sell ${petLabel(c.pet)} for ${fmtMoney(price)}`, run: () => { s.cash += price; g.carry = null; sfx.coin(); popup(g, m.x, m.y - 40, `+${fmtMoney(price)}`, '#7dff9a'); } });
+    out.push({ ...m, label: `Sell ${petLabel(c.pet)} for ${fmtMoney(price)}`, run: () => { s.cash += price; g.carry = null; sfx.coin(); popup(g, m.x, m.y - 40, `+${fmtMoney(price)}`, '#7dff9a'); burst(g, m.x, m.y - 10, ['#ffe14a', '#fff3a0', '#ffc02a'], 22, 230, { up: 200, kind: 'coin', size: 6 }); shakeIt(g, 0.15); } });
   }
   // fuse machine (unlocked by the first plot expansion)
   if (s.plotLv >= 1) {
@@ -216,7 +233,7 @@ function buildCands(g: GameData, lay: PlotLayout, openShop: () => void): Cand[] 
     if (c && c.kind === 'pet' && !s.fuseOut && c.pet.lv < MAX_PET_LEVEL && s.fuseIn.length < 3 && (s.fuseIn.length === 0 || (s.fuseIn[0].sp === c.pet.sp && s.fuseIn[0].lv === c.pet.lv))) {
       out.push({ ...m, label: `Fuse ${petLabel(c.pet)} (${s.fuseIn.length + 1}/3)`, run: () => {
         s.fuseIn.push(c.pet); g.carry = null; sfx.place();
-        if (s.fuseIn.length === 3) { s.fuseOut = { sp: c.pet.sp, lv: c.pet.lv + 1 }; s.fuseIn = []; sfx.hatch(); popup(g, m.x, m.y - 50, 'FUSED!', '#ffe14a'); }
+        if (s.fuseIn.length === 3) { s.fuseOut = { sp: c.pet.sp, lv: c.pet.lv + 1 }; s.fuseIn = []; sfx.hatch(); popup(g, m.x, m.y - 50, 'FUSED!', '#ffe14a'); burst(g, m.x, m.y, ['#b565ff', '#ffe14a', '#ffffff'], 36, 260, { up: 120, kind: 'star', size: 7 }); ring(g, m.x, m.y, '#ffe14a', 90); shakeIt(g, 0.4); }
       } });
     }
     if (!c && s.fuseOut) { const o = s.fuseOut; out.push({ ...m, label: `Collect ${petLabel(o)}`, run: () => { g.carry = { kind: 'pet', pet: o }; s.fuseOut = null; sfx.grab(); } }); }
@@ -259,7 +276,7 @@ function update(g: GameData, dt: number, inp: Input, lay: PlotLayout, openShop: 
     const h = s.hatch[i];
     if (h && h.t < hatchTime(h.sp)) {
       h.t += dt * (night ? NIGHT_HATCH_MULT : 1);
-      if (h.t >= hatchTime(h.sp)) { h.t = hatchTime(h.sp); sfx.hatch(); popup(g, lay.hatchPos[i].x, lay.hatchPos[i].y - 70, 'Hatched!', '#ffe14a'); }
+      if (h.t >= hatchTime(h.sp)) { h.t = hatchTime(h.sp); sfx.hatch(); popup(g, lay.hatchPos[i].x, lay.hatchPos[i].y - 70, 'Hatched!', '#ffe14a'); g.slotPop[i] = 0.5; const hx = lay.hatchPos[i].x, hy = lay.hatchPos[i].y; burst(g, hx, hy - 20, ['#ffe14a', '#ffffff', ...TIER_FX[SPECIES[h.sp].tier]], 34, 250, { up: 160, kind: 'star', size: 6 }); ring(g, hx, hy + 6, '#ffe14a', 80); shakeIt(g, 0.35); }
     }
   }
   // pets in the pen pay out, even while you are out stealing
@@ -270,7 +287,7 @@ function update(g: GameData, dt: number, inp: Input, lay: PlotLayout, openShop: 
     if (g.payT[i] >= PAY_INTERVAL) {
       g.payT[i] -= PAY_INTERVAL;
       const amt = petRate(pet) * PAY_INTERVAL; s.cash += amt;
-      popup(g, lay.penPos[i].x, lay.penPos[i].y - 50, `+${fmtMoney(amt)}`, '#7dff9a');
+      popup(g, lay.penPos[i].x, lay.penPos[i].y - 50, `+${fmtMoney(amt)}`, '#7dff9a'); burst(g, lay.penPos[i].x, lay.penPos[i].y - 20, ['#ffe14a', '#7dff9a'], 6, 110, { up: 130, kind: 'coin', size: 4 });
     }
   }
   // guards
@@ -285,6 +302,19 @@ function update(g: GameData, dt: number, inp: Input, lay: PlotLayout, openShop: 
   g.lastPrompt = best ? best.label : '';
   if (inp.act) { inp.act = false; if (best) best.run(); }
 
+  // game feel
+  if (s.cash > g.lastCash + 0.001) g.cashPulse = 1;
+  g.lastCash = s.cash;
+  g.cashPulse = Math.max(0, g.cashPulse - dt * 3);
+  g.shake = Math.max(0, g.shake - dt * 2.6);
+  if (g.carry !== g.prevCarry) { if (g.carry) g.carryPop = 0.3; g.prevCarry = g.carry; }
+  g.carryPop = Math.max(0, g.carryPop - dt);
+  for (const k of Object.keys(g.slotPop)) { g.slotPop[+k] -= dt; if (g.slotPop[+k] <= 0) delete g.slotPop[+k]; }
+  if (p.onTread && Math.random() < dt * 14) burst(g, p.x - p.face * 20, p.y + 4, ['#ffe14a', '#ffffff'], 1, 70, { up: 90, size: 3 });
+  if (p.moving && p.stun <= 0 && Math.random() < dt * 6) burst(g, p.x, p.y + 6, ['rgba(255,255,255,0.5)'], 1, 30, { grav: 0, size: 3 });
+  for (let i = 0; i < lay.hatchPos.length; i++) { const h = s.hatch[i]; if (h && h.t >= hatchTime(h.sp) && Math.random() < dt * 2.5) burst(g, lay.hatchPos[i].x + (Math.random() - 0.5) * 40, lay.hatchPos[i].y - 30 - Math.random() * 30, ['#ffe14a', '#ffffff'], 1, 25, { grav: -30, size: 3, kind: 'star' }); }
+  for (const q of g.parts) { q.life -= dt; q.x += q.vx * dt; q.y += q.vy * dt; q.vy += q.grav * dt; q.vx *= 1 - Math.min(1, dt * 1.5); }
+  g.parts = g.parts.filter(q => q.life > 0);
   // floating texts
   for (const q of g.popups) { q.life -= dt; q.y -= 28 * dt; }
   g.popups = g.popups.filter(q => q.life > 0);
@@ -309,7 +339,8 @@ function drawAnimal(ctx: CanvasRenderingContext2D, key: string, frame: number, x
   ctx.drawImage(img, (frame % SHEET.cols) * SHEET.cell, Math.floor(frame / SHEET.cols) * SHEET.cell, SHEET.cell, SHEET.cell, -dw / 2, -dw * 0.9, dw, dw);
   ctx.restore();
 }
-function drawEgg(ctx: CanvasRenderingContext2D, sp: Species, v: number, x: number, bottomY: number, h: number, wobble = 0, alpha = 1) {
+function drawEgg(ctx: CanvasRenderingContext2D, sp: Species, v: number, x: number, bottomY: number, h: number, wobble = 0, alpha = 1, shadowY?: number) {
+  if (shadowY !== undefined) shadow(ctx, x, shadowY, h * 0.36 * (1 - Math.min(0.5, Math.abs(shadowY - bottomY) / 160)), 0.3 * alpha);
   const img = eggImgs[`${sp}_${v % eggVariantCount(sp)}`];
   if (!img || !img.complete || img.naturalWidth === 0) { ctx.fillStyle = '#f4e3c0'; ctx.beginPath(); ctx.ellipse(x, bottomY - h / 2, h * 0.36, h / 2, 0, 0, Math.PI * 2); ctx.fill(); return; }
   const w = (h * img.naturalWidth) / img.naturalHeight;
@@ -317,7 +348,15 @@ function drawEgg(ctx: CanvasRenderingContext2D, sp: Species, v: number, x: numbe
   ctx.drawImage(img, -w / 2, -h, w, h); ctx.restore();
 }
 function shadow(ctx: CanvasRenderingContext2D, x: number, y: number, rx: number, a = 0.28) {
-  ctx.fillStyle = `rgba(0,0,0,${a})`; ctx.beginPath(); ctx.ellipse(x, y, rx, rx * 0.35, 0, 0, Math.PI * 2); ctx.fill();
+  // soft shadow: darkest in the middle, fading out at the edge
+  if (rx <= 0) return;
+  ctx.save(); ctx.translate(x, y); ctx.scale(1, 0.35);
+  const gr = ctx.createRadialGradient(0, 0, 0, 0, 0, rx);
+  gr.addColorStop(0, `rgba(0,0,0,${a * 1.25})`); gr.addColorStop(0.65, `rgba(0,0,0,${a * 0.8})`); gr.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = gr; ctx.beginPath(); ctx.arc(0, 0, rx, 0, Math.PI * 2); ctx.fill(); ctx.restore();
+}
+function dropShadow(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r = 12, a = 0.25) {
+  ctx.fillStyle = `rgba(0,0,0,${a})`; rrect(ctx, x + 6, y + 9, w, h, r); ctx.fill();
 }
 function label(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, size = 14, color = '#fff') {
   ctx.font = `bold ${size}px monospace`; ctx.textAlign = 'center'; ctx.lineJoin = 'round'; ctx.lineWidth = 4; ctx.strokeStyle = 'rgba(0,0,0,0.75)'; ctx.fillStyle = color;
@@ -354,6 +393,7 @@ function drawTree(ctx: CanvasRenderingContext2D, x: number, y: number, v: number
 
 function drawPlot(ctx: CanvasRenderingContext2D, g: GameData, lay: PlotLayout, now: number) {
   const s = g.save, r = lay.rect;
+  dropShadow(ctx, r.x, r.y, r.w, r.h, 18, 0.3);
   ctx.fillStyle = '#d9b97f'; rrect(ctx, r.x, r.y, r.w, r.h, 18); ctx.fill();
   ctx.fillStyle = 'rgba(120,80,40,0.10)';
   for (let yy = r.y + 30; yy < r.y + r.h - 10; yy += 34) ctx.fillRect(r.x + 8, yy, r.w - 16, 2);
@@ -363,6 +403,7 @@ function drawPlot(ctx: CanvasRenderingContext2D, g: GameData, lay: PlotLayout, n
   label(ctx, 'SAFE ZONE', r.x + r.w - 70, r.y + r.h - 14, 14, '#9dffb4');
   // treadmill
   const t = lay.treadmill;
+  dropShadow(ctx, t.x, t.y, t.w, t.h, 12);
   ctx.fillStyle = '#2f3440'; rrect(ctx, t.x, t.y, t.w, t.h, 12); ctx.fill();
   ctx.save(); rrect(ctx, t.x + 6, t.y + 6, t.w - 12, t.h - 12, 8); ctx.clip();
   ctx.fillStyle = '#454c5c'; ctx.fillRect(t.x, t.y, t.w, t.h);
@@ -372,16 +413,19 @@ function drawPlot(ctx: CanvasRenderingContext2D, g: GameData, lay: PlotLayout, n
   label(ctx, `TREADMILL +${treadRate(s)}/s`, t.x + t.w / 2, t.y - 6, 12, g.player.onTread ? '#ffe14a' : '#fff');
   // shop
   const sh = lay.shop;
+  dropShadow(ctx, sh.x, sh.y, sh.w, sh.h, 6);
   ctx.fillStyle = '#8b5a2b'; ctx.fillRect(sh.x + 6, sh.y + 30, sh.w - 12, sh.h - 30);
   for (let i = 0; i < 6; i++) { ctx.fillStyle = i % 2 ? '#fff' : '#e04545'; ctx.fillRect(sh.x + i * (sh.w / 6), sh.y, sh.w / 6, 34); }
   label(ctx, 'SHOP', sh.x + sh.w / 2, sh.y + sh.h - 22, 16, '#ffe14a'); label(ctx, '🛒', sh.x + sh.w / 2, sh.y + sh.h - 42, 18);
   // sell stand
   const se = lay.sell;
+  dropShadow(ctx, se.x, se.y, se.w, se.h, 6);
   ctx.fillStyle = '#3f6fb5'; ctx.fillRect(se.x + 6, se.y + 30, se.w - 12, se.h - 30);
   for (let i = 0; i < 6; i++) { ctx.fillStyle = i % 2 ? '#fff' : '#3f6fb5'; ctx.fillRect(se.x + i * (se.w / 6), se.y, se.w / 6, 34); }
   label(ctx, 'SELL', se.x + se.w / 2, se.y + se.h - 22, 16, '#7dff9a'); label(ctx, '💰', se.x + se.w / 2, se.y + se.h - 42, 18);
   // fuse machine
   const f = lay.fuse, locked = s.plotLv < 1;
+  dropShadow(ctx, f.x, f.y, f.w, f.h, 12);
   ctx.fillStyle = locked ? '#555' : '#7b4fb8'; rrect(ctx, f.x, f.y, f.w, f.h, 12); ctx.fill();
   ctx.fillStyle = 'rgba(0,0,0,0.35)'; rrect(ctx, f.x + 10, f.y + 12, f.w - 20, 44, 8); ctx.fill();
   if (locked) { label(ctx, '🔒', f.x + f.w / 2, f.y + 44, 24); label(ctx, 'Expand plot', f.x + f.w / 2, f.y + f.h - 12, 11, '#ccc'); }
@@ -415,7 +459,7 @@ function drawNest(ctx: CanvasRenderingContext2D, g: GameData, n: Nest, now: numb
   if (n.egg) {
     ctx.strokeStyle = info.color; ctx.lineWidth = 3; ctx.globalAlpha = 0.5 + Math.sin(now * 0.005 + n.x) * 0.25;
     ctx.beginPath(); ctx.ellipse(n.x, n.y + 10, 42, 19, 0, 0, Math.PI * 2); ctx.stroke(); ctx.globalAlpha = 1;
-    drawEgg(ctx, n.egg, n.eggV, n.x, n.y + 14, info.eggH);
+    drawEgg(ctx, n.egg, n.eggV, n.x, n.y + 14, info.eggH, Math.sin(now * 0.004 + n.x) * 0.03, 1, n.y + 15);
     const need = Math.ceil(info.guardSpeed + info.weight);
     label(ctx, `${info.label} · need ⚡${need}`, n.x, n.y + 44, 12, pSpeed >= need ? '#9dffb4' : '#ff8a8a');
   } else {
@@ -454,8 +498,9 @@ function drawPlayer(ctx: CanvasRenderingContext2D, g: GameData, now: number) {
   const c = g.carry;
   if (c) {
     const cx = p.x + p.face * 36, cy = p.y - size * 0.6 - 4 - bob;
-    if (c.kind === 'egg') drawEgg(ctx, c.sp, c.v, cx, cy + 20, TIER_INFO[SPECIES[c.sp].tier].eggH * 0.85, Math.sin(now * 0.012) * 0.12);
-    else drawAnimal(ctx, `${c.pet.sp}_idle`, frameOf(now, 10), cx, cy + 34, SPECIES[c.pet.sp].size * 0.6, p.face > 0);
+    const pk = 1 + 0.3 * Math.sin((g.carryPop / 0.3) * Math.PI);          // little pop when you pick something up
+    if (c.kind === 'egg') drawEgg(ctx, c.sp, c.v, cx, cy + 20, TIER_INFO[SPECIES[c.sp].tier].eggH * 0.85 * pk, Math.sin(now * 0.012) * 0.12, 1, p.y + 8);
+    else { shadow(ctx, cx, p.y + 8, SPECIES[c.pet.sp].size * 0.22, 0.25); drawAnimal(ctx, `${c.pet.sp}_idle`, frameOf(now, 10), cx, cy + 34, SPECIES[c.pet.sp].size * 0.6 * pk, p.face > 0); }
   }
   if (p.stun > 0) label(ctx, '💫', p.x, p.y - size - 18, 22);
   label(ctx, 'YOU', p.x, p.y - size - (p.stun > 0 ? 40 : 14), 12, '#9fd0ff');
@@ -466,8 +511,9 @@ function render(ctx: CanvasRenderingContext2D, g: GameData, cw: number, ch: numb
   const S = Math.max(0.5, Math.min(cw / 1100, ch / 700));
   const vw = cw / S, vh = ch / S;
   const camX = Math.min(Math.max(0, WORLD_W - vw), Math.max(0, p.x - vw / 2)), camY = Math.min(Math.max(0, WORLD_H - vh), Math.max(0, p.y - vh / 2 - 20));
+  const sh = g.shake * g.shake * 14, shx = (Math.random() - 0.5) * 2 * sh, shy = (Math.random() - 0.5) * 2 * sh;
   ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillStyle = '#243a22'; ctx.fillRect(0, 0, cw * dpr, ch * dpr);
-  ctx.setTransform(S * dpr, 0, 0, S * dpr, -camX * S * dpr, -camY * S * dpr);
+  ctx.setTransform(S * dpr, 0, 0, S * dpr, (-camX + shx) * S * dpr, (-camY + shy) * S * dpr);
   ctx.fillStyle = ground(ctx); ctx.fillRect(0, 0, WORLD_W, WORLD_H);
   ctx.lineWidth = 16; ctx.strokeStyle = '#6b4a2b'; ctx.strokeRect(0, 0, WORLD_W, WORLD_H);
   const vis = (x: number, y: number, m = 160) => x > camX - m && x < camX + vw + m && y > camY - m && y < camY + vh + m;
@@ -489,9 +535,10 @@ function render(ctx: CanvasRenderingContext2D, g: GameData, cw: number, ch: numb
     const h = g.save.hatch[i]; if (!h) return;
     const total = hatchTime(h.sp), done = h.t >= total, info = TIER_INFO[SPECIES[h.sp].tier];
     items.push({ y: pos.y + 10, draw: () => {
-      if (done) { drawAnimal(ctx, `${h.sp}_idle`, frameOf(now, 10, i * 3), pos.x, pos.y + 14, SPECIES[h.sp].size * 0.8, false); label(ctx, 'READY!', pos.x, pos.y - 56, 12, '#ffe14a'); return; }
+      const pop = 1 + 0.3 * Math.sin(((g.slotPop[i] ?? 0) / 0.35) * Math.PI);
+      if (done) { shadow(ctx, pos.x, pos.y + 14, SPECIES[h.sp].size * 0.34, 0.28); drawAnimal(ctx, `${h.sp}_idle`, frameOf(now, 10, i * 3), pos.x, pos.y + 14, SPECIES[h.sp].size * 0.8 * pop, false); label(ctx, 'READY!', pos.x, pos.y - 56, 12, '#ffe14a'); return; }
       const wob = (h.t / total) > 0.7 ? Math.sin(now * 0.03) * 0.14 : Math.sin(now * 0.006 + i) * 0.03;
-      drawEgg(ctx, h.sp, h.v ?? 0, pos.x, pos.y + 12, info.eggH * 0.9, wob);
+      drawEgg(ctx, h.sp, h.v ?? 0, pos.x, pos.y + 12, info.eggH * 0.9 * pop, wob, 1, pos.y + 14);
       ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(pos.x - 28, pos.y + 22, 56, 8);
       ctx.fillStyle = info.color; ctx.fillRect(pos.x - 27, pos.y + 23, 54 * (h.t / total), 6);
       label(ctx, fmtTime(Math.ceil(total - h.t)), pos.x, pos.y + 46, 11);
@@ -511,7 +558,18 @@ function render(ctx: CanvasRenderingContext2D, g: GameData, cw: number, ch: numb
   items.sort((a, b) => a.y - b.y).forEach(i => i.draw());
 
   // floating texts
-  for (const q of g.popups) { ctx.globalAlpha = Math.min(1, q.life * 1.5); label(ctx, q.text, q.x, q.y, 18, q.color); ctx.globalAlpha = 1; }
+  for (const q of g.parts) {
+    const k = Math.max(0, q.life / q.max); ctx.globalAlpha = Math.min(1, k * 1.6);
+    if (q.kind === 'ring') { const r = q.size * (1 - k); ctx.strokeStyle = q.color; ctx.lineWidth = 5 * k + 1; ctx.beginPath(); ctx.ellipse(q.x, q.y, r, r * 0.4, 0, 0, Math.PI * 2); ctx.stroke(); }
+    else if (q.kind === 'coin') { ctx.fillStyle = q.color; ctx.strokeStyle = 'rgba(120,70,0,0.7)'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.ellipse(q.x, q.y, q.size, q.size * Math.abs(Math.cos(q.life * 14)) + 0.5, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); }
+    else if (q.kind === 'star') { const r = q.size * (0.5 + k * 0.7); ctx.fillStyle = q.color; ctx.beginPath(); ctx.moveTo(q.x, q.y - r * 1.5); ctx.lineTo(q.x + r * 0.4, q.y - r * 0.4); ctx.lineTo(q.x + r * 1.5, q.y); ctx.lineTo(q.x + r * 0.4, q.y + r * 0.4); ctx.lineTo(q.x, q.y + r * 1.5); ctx.lineTo(q.x - r * 0.4, q.y + r * 0.4); ctx.lineTo(q.x - r * 1.5, q.y); ctx.lineTo(q.x - r * 0.4, q.y - r * 0.4); ctx.closePath(); ctx.fill(); }
+    else { ctx.fillStyle = q.color; ctx.beginPath(); ctx.arc(q.x, q.y, q.size * (0.4 + k * 0.6), 0, Math.PI * 2); ctx.fill(); }
+    ctx.globalAlpha = 1;
+  }
+  for (const q of g.popups) {
+    const age = 1.4 - q.life, pop = age < 0.2 ? 1 + 0.7 * (1 - age / 0.2) : 1;      // text pops in big, then settles
+    ctx.save(); ctx.translate(q.x, q.y); ctx.scale(pop, pop); ctx.globalAlpha = Math.min(1, q.life * 1.5); label(ctx, q.text, 0, 0, 18, q.color); ctx.restore();
+  }
 
   // ---- screen space ----
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -527,7 +585,7 @@ function drawHud(ctx: CanvasRenderingContext2D, g: GameData, cw: number, ch: num
   const s = g.save, sp = effSpeed(g);
   ctx.textAlign = 'left';
   ctx.fillStyle = 'rgba(0,0,0,0.6)'; rrect(ctx, 12, 54, 210, 70, 10); ctx.fill();
-  ctx.font = 'bold 22px monospace'; ctx.fillStyle = '#7dff9a'; ctx.fillText(fmtMoney(s.cash), 24, 82);
+  ctx.save(); ctx.translate(24, 82); ctx.scale(1 + 0.3 * g.cashPulse, 1 + 0.3 * g.cashPulse); ctx.font = 'bold 22px monospace'; ctx.fillStyle = g.cashPulse > 0.3 ? '#eaffef' : '#7dff9a'; ctx.fillText(fmtMoney(s.cash), 0, 0); ctx.restore();
   ctx.font = 'bold 14px monospace'; ctx.fillStyle = '#fff'; ctx.fillText(`⚡ SPEED ${Math.round(sp)}`, 24, 104);
   const c = g.carry;
   if (c && c.kind === 'egg') { const w = weightPenalty(SPECIES[c.sp].tier, s.armsLv); ctx.fillStyle = '#ffb36b'; ctx.fillText(`carrying egg −${Math.round(w)}`, 24, 120); }
@@ -644,7 +702,7 @@ export default function StealEggGame({ onExit }: { onExit: () => void }) {
     if (cost === null || s.cash < cost) { sfx.no(); return; }
     if (k === 'slot' && L.hatchPos.length >= L.hatchCap) { sfx.no(); return; }
     if (k === 'pen' && L.penPos.length >= L.penCap) { sfx.no(); return; }
-    s.cash -= cost; sfx.buy();
+    s.cash -= cost; sfx.buy(); burst(g, g.player.x, g.player.y - 60, ['#ffe14a', '#7dff9a', '#ffffff'], 22, 220, { up: 160, kind: 'star', size: 5 }); ring(g, g.player.x, g.player.y, '#ffe14a', 70);
     if (k === 'plot') s.plotLv++; else if (k === 'tread') s.treadLv++; else if (k === 'arms') s.armsLv++; else if (k === 'slot') s.extraSlots++; else s.penUpg++;
     persist(g); force(n => n + 1);
   };
