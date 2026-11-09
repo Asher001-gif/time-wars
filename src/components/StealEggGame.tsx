@@ -98,7 +98,7 @@ interface GameData {
   save: Save;
   nests: Nest[];
   deco: ReturnType<typeof makeDeco>;
-  player: { x: number; y: number; face: number; stun: number; moving: boolean; onTread: boolean; sprint: boolean };
+  player: { x: number; y: number; face: number; stun: number; moving: boolean; onTread: boolean; sprint: boolean; sprintLock: boolean };
   carry: Carry | null;
   cycleT: number; t: number; wasNight: boolean;
   payT: number[]; popups: Popup[];
@@ -113,7 +113,7 @@ function createData(): GameData {
   const nests = buildNests();
   return {
     save, nests, deco: makeDeco(nests.map(n => ({ x: n.x, y: n.y, tier: n.tier }))),
-    player: { x: lay.spawn.x, y: lay.spawn.y, face: 1, stun: 0, moving: false, onTread: false, sprint: false },
+    player: { x: lay.spawn.x, y: lay.spawn.y, face: 1, stun: 0, moving: false, onTread: false, sprint: false, sprintLock: false },
     carry: save.carry ? { kind: 'pet', pet: save.carry.pet } : null,
     cycleT: 0, t: 0, wasNight: false,
     payT: Array.from({ length: 200 }, (_, i) => (i * 0.37) % PAY_INTERVAL), popups: [], saveT: 0, flash: 0, lastPrompt: '', nightMsg: 0, tip: 0,
@@ -154,7 +154,7 @@ function resetEggs(g: GameData) {
 function knockOut(g: GameData, lay: PlotLayout) {
   const c = g.carry;
   if (c && c.kind === 'egg') { const n = g.nests[c.nest]; if (n && !n.egg) { n.egg = c.sp; n.eggV = c.v; } g.carry = null; }
-  g.player.x = lay.spawn.x; g.player.y = lay.spawn.y; g.player.stun = 2.4; g.player.sprint = false; g.flash = 1;
+  g.player.x = lay.spawn.x; g.player.y = lay.spawn.y; g.player.stun = 2.4; g.player.sprintLock = false; g.flash = 1;
   sfx.hit();
   burst(g, g.player.x, g.player.y - 40, ['#ff4a4a', '#ffb0b0', '#ffffff'], 24, 260, { up: 100 }); shakeIt(g, 0.9);
 }
@@ -317,7 +317,8 @@ function update(g: GameData, dt: number, inp: Input, lay: PlotLayout, openShop: 
   }
   g.lastPrompt = best ? best.label : '';
   if (inp.act) { inp.act = false; if (best) best.run(); }
-  if (inp.sprintTog) { inp.sprintTog = false; if (p.stun <= 0) { p.sprint = !p.sprint; sfx.place(); } }
+  if (inp.sprintTog) { inp.sprintTog = false; if (p.stun <= 0) { p.sprintLock = !p.sprintLock; sfx.place(); } }
+  p.sprint = (p.sprintLock || inp.shift) && p.stun <= 0;         // hold Shift, or press 0 to switch it on / off
 
   // game feel
   if (s.cash > g.lastCash + 0.001) g.cashPulse = 1;
@@ -631,7 +632,7 @@ function drawHud(ctx: CanvasRenderingContext2D, g: GameData, cw: number, ch: num
 }
 
 /* ============================== input + UI ============================== */
-interface Input { up: boolean; down: boolean; left: boolean; right: boolean; ax: number; ay: number; act: boolean; sprintTog: boolean }
+interface Input { up: boolean; down: boolean; left: boolean; right: boolean; ax: number; ay: number; act: boolean; sprintTog: boolean; shift: boolean }
 
 function Joystick({ onMove }: { onMove: (x: number, y: number) => void }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -653,7 +654,7 @@ function Joystick({ onMove }: { onMove: (x: number, y: number) => void }) {
 export default function StealEggGame({ onExit }: { onExit: () => void }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const gRef = useRef<GameData | null>(null);
-  const inpRef = useRef<Input>({ up: false, down: false, left: false, right: false, ax: 0, ay: 0, act: false, sprintTog: false });
+  const inpRef = useRef<Input>({ up: false, down: false, left: false, right: false, ax: 0, ay: 0, act: false, sprintTog: false, shift: false });
   const shopRef = useRef(false);
   const [ready, setReady] = useState(false);
   const [shopOpen, setShopOpen] = useState(false);
@@ -688,14 +689,15 @@ export default function StealEggGame({ onExit }: { onExit: () => void }) {
       if (k === 'w' || k === 'arrowup') i.up = v; else if (k === 's' || k === 'arrowdown') i.down = v;
       else if (k === 'a' || k === 'arrowleft') i.left = v; else if (k === 'd' || k === 'arrowright') i.right = v;
       else if ((k === 'e' || k === '5' || k === 'enter') && v && !e.repeat) i.act = true;
-      else if ((k === '0' || k === ')') && v && !e.repeat) i.sprintTog = true;
+      else if ((e.code === 'Digit0' || e.code === 'Numpad0') && v && !e.repeat) i.sprintTog = true;
+      else if (k === 'shift') i.shift = v;
       else if (k === 'escape' && v) closeShop();
       else return;
       if (k.startsWith('arrow')) e.preventDefault();
     };
     const d = (e: KeyboardEvent) => set(e, true), u = (e: KeyboardEvent) => set(e, false);
     window.addEventListener('keydown', d); window.addEventListener('keyup', u);
-    const blur = () => { const i = inpRef.current; i.up = i.down = i.left = i.right = false; };
+    const blur = () => { const i = inpRef.current; i.up = i.down = i.left = i.right = i.shift = false; };
     window.addEventListener('blur', blur);
     return () => { window.removeEventListener('keydown', d); window.removeEventListener('keyup', u); window.removeEventListener('blur', blur); };
   }, [closeShop]);
@@ -777,7 +779,7 @@ export default function StealEggGame({ onExit }: { onExit: () => void }) {
           <div className="px-5 py-4 rounded-2xl bg-black/80 border-2 border-yellow-300 font-mono text-center text-white max-w-2xl">
             <div className="font-bold text-lg sm:text-2xl">Steal an egg. Outrun the guard. Hatch it at home.</div>
             <div className="text-xs sm:text-sm mt-2 opacity-85">
-              {isMobile ? 'Joystick to move • ACTION button to grab / place / sell' : 'WASD / arrows move • E or 5 to grab, place, sell and open the shop • 0 or ) to sprint (slow, but you can sneak close to animals)'}
+              {isMobile ? 'Joystick to move • ACTION button to grab / place / sell' : 'WASD / arrows move • E or 5 to grab, place, sell and open the shop • hold Shift or press 0 to sprint (slow, but you can sneak close to animals)'}
               <br />Stand on the treadmill to get faster — heavier eggs need more speed. Pets in your pen earn cash.
             </div>
           </div>
@@ -791,7 +793,7 @@ export default function StealEggGame({ onExit }: { onExit: () => void }) {
             style={{ touchAction: 'none' }}
             onPointerDown={e => { e.preventDefault(); unlockAudio(); inpRef.current.sprintTog = true; }}
           >
-            {sprint ? 'SPRINT ON · slow, guards notice late' : isMobile ? 'SPRINT' : 'Press 0 / ) to sprint'}
+            {sprint ? 'SPRINT ON · slow, guards notice late' : isMobile ? 'SPRINT' : 'Hold Shift or press 0 to sprint'}
           </button>
         </div>
       )}
