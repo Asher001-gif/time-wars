@@ -2,8 +2,9 @@ import marsIcon from '@/assets/icon-mars-mission.webp';
 import footballIcon from '@/assets/icon-football.webp';
 import volleyballIcon from '@/assets/icon-volleyball.webp';
 import warehouseIcon from '@/assets/warehouse/icon-warehouse.webp';
+import stealEggIcon from '@/assets/icon-stealegg.webp';
 
-export type GameId = 'mars' | 'football' | 'volleyball' | 'warehouse';
+export type GameId = 'mars' | 'football' | 'volleyball' | 'warehouse' | 'stealegg';
 
 export interface GameEntry {
   id: GameId;
@@ -18,4 +19,5 @@ export const GAME_LIST: GameEntry[] = [
   { id: 'football', name: 'Football', icon: footballIcon },
   { id: 'volleyball', name: 'Volleyball', icon: volleyballIcon },
   { id: 'warehouse', name: 'Warehouse', icon: warehouseIcon },
+  { id: 'stealegg', name: 'Steal an Egg', icon: stealEggIcon },
 ];

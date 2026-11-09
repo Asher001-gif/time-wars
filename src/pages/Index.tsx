@@ -8,6 +8,7 @@ import FootballTimeScreen from '@/components/FootballTimeScreen';
 import { preloadReferee } from '@/game/preload';
 import { preloadVolleyballAssets } from '@/game/volleyballAssets';
 import WarehouseGame from '@/components/WarehouseGame';
+import StealEggGame from '@/components/StealEggGame';
 import VolleyballGame from '@/components/VolleyballGame';
 import VolleyballPointsScreen from '@/components/VolleyballPointsScreen';
 import RoleBanner from '@/components/RoleBanner';
@@ -21,6 +22,7 @@ export default function Index() {
   const [screen, setScreen] = useState<'lobby' | 'games' | 'footballTime' | 'volleyPoints'>('lobby');
   const [volleyTarget, setVolleyTarget] = useState<number | null>(null);
   const [warehouse, setWarehouse] = useState(false);
+  const [stealEgg, setStealEgg] = useState(false);
   const [showTutorial, setShowTutorial] = useState(false);
   const [username, setUsername] = useState<string>('Astro');
   const [draftName, setDraftName] = useState<string>('');
@@ -67,6 +69,7 @@ export default function Index() {
 
   if (loading) return <LoadingScreen />;
   if (warehouse) return <WarehouseGame onExit={() => { setWarehouse(false); setScreen('games'); }} />;
+  if (stealEgg) return <StealEggGame onExit={() => { setStealEgg(false); setScreen('games'); }} />;
   if (volleyTarget !== null) {
     return <VolleyballGame key={volleyTarget} target={volleyTarget} playerName={username} onExit={handleRestart} />;
   }
@@ -79,6 +82,7 @@ export default function Index() {
           else if (g === 'football') setScreen('footballTime');
           else if (g === 'volleyball') setScreen('volleyPoints');
           else if (g === 'warehouse') setWarehouse(true);
+          else if (g === 'stealegg') setStealEgg(true);
         }}
       />
     );
