@@ -15,10 +15,10 @@ export const TIER_INFO: Record<Tier, {
   eggH: number;                                        // drawn egg height in px
   speedBonus: number;                                  // px/s a pet of this tier adds while in the pen
 }> = {
-  common:   { label: 'Common',   color: '#e8e8e8', hatch: 10,  guard: 'dog',  guardSpeed: 150, weight: 8,  eggH: 46, speedBonus: 1 },
-  uncommon: { label: 'Uncommon', color: '#58d46a', hatch: 30,  guard: 'dog',  guardSpeed: 190, weight: 22, eggH: 52, speedBonus: 2 },
-  rare:     { label: 'Rare',     color: '#4aa8ff', hatch: 90,  guard: 'wolf', guardSpeed: 250, weight: 45, eggH: 60, speedBonus: 4 },
-  epic:     { label: 'Epic',     color: '#b565ff', hatch: 300, guard: 'wolf', guardSpeed: 300, weight: 80, eggH: 68, speedBonus: 8 },
+  common:   { label: 'Common',   color: '#e8e8e8', hatch: 10,  guard: 'dog',  guardSpeed: 150, weight: 8,  eggH: 38, speedBonus: 1 },
+  uncommon: { label: 'Uncommon', color: '#58d46a', hatch: 30,  guard: 'dog',  guardSpeed: 190, weight: 22, eggH: 54, speedBonus: 2 },
+  rare:     { label: 'Rare',     color: '#4aa8ff', hatch: 90,  guard: 'wolf', guardSpeed: 250, weight: 45, eggH: 72, speedBonus: 4 },
+  epic:     { label: 'Epic',     color: '#b565ff', hatch: 300, guard: 'wolf', guardSpeed: 300, weight: 80, eggH: 92, speedBonus: 8 },
 };
 
 export const SPECIES: Record<Species, { name: string; tier: Tier; rate: number; size: number }> = {

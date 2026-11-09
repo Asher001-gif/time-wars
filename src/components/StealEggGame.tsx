@@ -190,6 +190,9 @@ function buildCands(g: GameData, lay: PlotLayout, openShop: () => void): Cand[] 
     const slot = s.hatch[i] ?? null;
     if (!slot && c && c.kind === 'egg') {
       out.push({ ...pos, label: `Place ${SPECIES[c.sp].name} egg`, run: () => { s.hatch[i] = { sp: c.sp, t: 0, v: c.v }; g.carry = null; sfx.place(); } });
+    } else if (slot && slot.t >= hatchTime(slot.sp) && c && c.kind === 'egg') {
+      // hatched animal waiting + holding an egg: swap them (egg goes in to hatch, animal comes out)
+      out.push({ ...pos, label: `Swap: place ${SPECIES[c.sp].name} egg, take ${SPECIES[slot.sp].name}`, run: () => { g.carry = { kind: 'pet', pet: { sp: slot.sp, lv: 1 } }; s.hatch[i] = { sp: c.sp, t: 0, v: c.v }; sfx.place(); } });
     } else if (slot && slot.t >= hatchTime(slot.sp) && !c) {
       out.push({ ...pos, label: `Take ${SPECIES[slot.sp].name}`, run: () => { g.carry = { kind: 'pet', pet: { sp: slot.sp, lv: 1 } }; s.hatch[i] = null; sfx.grab(); } });
     }
