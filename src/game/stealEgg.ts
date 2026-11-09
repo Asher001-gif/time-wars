@@ -63,7 +63,7 @@ export const hatchTime = (sp: Species) => TIER_INFO[SPECIES[sp].tier].hatch;
 
 /* ---------- shop ---------- */
 export type ShopKey = 'plot' | 'tread' | 'arms' | 'slot' | 'pen';
-export const TREAD_RATES = [1.5, 3, 5, 9, 16, 30];       // speed gained per second standing on the treadmill, by level
+export const TREAD_RATES = [1, 2, 3.5, 6, 10, 20];       // speed gained per second standing on the treadmill, by level
 export const SHOP: Record<ShopKey, { name: string; desc: string; costs: number[] }> = {
   plot:  { name: 'Plot expansion',    desc: 'Bigger base: +1 hatch slot and +2 pen spots',          costs: [150, 600, 2000, 7000, 20000] },
   tread: { name: 'Treadmill upgrade', desc: 'Gain speed faster while you stand on the treadmill',   costs: [250, 1200, 6000, 30000, 150000] },
