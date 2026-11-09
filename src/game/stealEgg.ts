@@ -22,15 +22,15 @@ export const TIER_INFO: Record<Tier, {
 };
 
 export const SPECIES: Record<Species, { name: string; tier: Tier; rate: number; size: number }> = {
-  chicken: { name: 'Chicken', tier: 'common',   rate: 1,    size: 54 },
-  duck:    { name: 'Duck',    tier: 'common',   rate: 1.3,  size: 54 },
-  sheep:   { name: 'Sheep',   tier: 'uncommon', rate: 3,    size: 70 },
-  pig:     { name: 'Pig',     tier: 'uncommon', rate: 3.6,  size: 68 },
-  cow:     { name: 'Cow',     tier: 'rare',     rate: 9,    size: 92 },
-  fox:     { name: 'Fox',     tier: 'rare',     rate: 11,   size: 70 },
-  heron:   { name: 'Heron',   tier: 'rare',     rate: 12,   size: 88 },
-  horse:   { name: 'Horse',   tier: 'epic',     rate: 30,   size: 108 },
-  wolf:    { name: 'Wolf',    tier: 'epic',     rate: 36,   size: 90 },
+  chicken: { name: 'Chicken', tier: 'common',   rate: 1,    size: 52 },
+  duck:    { name: 'Duck',    tier: 'common',   rate: 1.3,  size: 56 },
+  sheep:   { name: 'Sheep',   tier: 'uncommon', rate: 3,    size: 74 },
+  pig:     { name: 'Pig',     tier: 'uncommon', rate: 3.6,  size: 72 },
+  cow:     { name: 'Cow',     tier: 'rare',     rate: 9,    size: 104 },
+  fox:     { name: 'Fox',     tier: 'rare',     rate: 11,   size: 92 },
+  heron:   { name: 'Heron',   tier: 'rare',     rate: 12,   size: 100 },
+  horse:   { name: 'Horse',   tier: 'epic',     rate: 30,   size: 130 },
+  wolf:    { name: 'Wolf',    tier: 'epic',     rate: 36,   size: 124 },
 };
 
 export const SPECIES_BY_TIER: Record<Tier, Species[]> = {

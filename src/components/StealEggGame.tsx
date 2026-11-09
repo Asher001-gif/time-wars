@@ -26,7 +26,16 @@ const noticeOf = (k: Species) => (bigTier(SPECIES[k].tier) ? 300 : 240);
 const PATROL_R = 170;
 const patrolSpeedOf = (k: Species) => (bigTier(SPECIES[k].tier) ? 78 : 60);
 const REACH = 78;
-const guardSizeOf = (k: Species) => Math.max(SPECIES[k].size, 76);
+const guardSizeOf = (k: Species) => SPECIES[k].size * 1.15;           // bigger animal = rarer animal (sizes are set per species in stealEgg.ts)
+const eggKeepOut = (k: Species) => 46 + guardSizeOf(k) * 0.28;          // a guard can never walk into the egg it protects
+const EGG_SQUASH = 1.5;                                                   // top-down view: the keep-out circle is squashed in y
+function pushOutOfEgg(x: number, y: number, n: Nest, k: Species): [number, number] {
+  let dx = x - n.x, dy = (y - (n.y + 10)) * EGG_SQUASH, d = Math.hypot(dx, dy);
+  const R = eggKeepOut(k);
+  if (d >= R) return [x, y];
+  if (d < 0.01) { dx = 1; dy = 0; d = 1; }
+  return [n.x + (dx / d) * R, n.y + 10 + (dy / d) * R / EGG_SQUASH];
+}
 
 /* ============================== tiny synth ============================== */
 let actx: AudioContext | null = null;
@@ -71,13 +80,14 @@ const petLabel = (p: Pet) => `${SPECIES[p.sp].name}${p.lv > 1 ? ` Lv${p.lv}` : '
 const pickVariant = (sp: Species) => Math.floor(Math.random() * eggVariantCount(sp));
 const pickSpecies = (tier: Tier): Species => { const a = SPECIES_BY_TIER[tier]; return a[Math.floor(Math.random() * a.length)]; };
 
-function makeGuard(x: number, y: number, kind: Species): Guard {
+function makeGuard(nx: number, ny: number, kind: Species): Guard {
+  const R = eggKeepOut(kind) + 16, x = nx + 0.8 * R, y = ny + 10 + 0.6 * R / EGG_SQUASH;   // home spot sits just outside the egg
   return { x, y, hx: x, hy: y, kind, state: 'patrol', tx: x, ty: y, wait: Math.random() * 2, face: -1, timer: 0, moving: false };
 }
 function buildNests(): Nest[] {
   return makeNests().map(d => {
     const egg = pickSpecies(d.tier);
-    return { x: d.x, y: d.y, tier: d.tier, egg, eggV: pickVariant(egg), guard: makeGuard(d.x + 60, d.y + 40, egg) };
+    return { x: d.x, y: d.y, tier: d.tier, egg, eggV: pickVariant(egg), guard: makeGuard(d.x, d.y, egg) };
   });
 }
 
@@ -135,7 +145,7 @@ const shakeIt = (g: GameData, a: number) => { g.shake = Math.min(1, Math.max(g.s
 function popup(g: GameData, x: number, y: number, text: string, color = '#fff') { g.popups.push({ x, y, text, color, life: 1.4 }); }
 
 function resetEggs(g: GameData) {
-  g.nests.forEach(n => { const sp = pickSpecies(n.tier); n.egg = sp; n.eggV = pickVariant(sp); n.guard = makeGuard(n.x + 60, n.y + 40, sp); });
+  g.nests.forEach(n => { const sp = pickSpecies(n.tier); n.egg = sp; n.eggV = pickVariant(sp); n.guard = makeGuard(n.x, n.y, sp); });
 }
 
 function knockOut(g: GameData, lay: PlotLayout) {
@@ -174,6 +184,7 @@ function updateGuard(g: GameData, n: Nest, dt: number, lay: PlotLayout) {
       if (Math.hypot(gd.tx - gd.x, gd.ty - gd.y) < 6) {
         const a = Math.random() * Math.PI * 2, r = 40 + Math.random() * PATROL_R;
         gd.tx = gd.hx + Math.cos(a) * r; gd.ty = gd.hy + Math.sin(a) * r; gd.wait = 0.8 + Math.random() * 2;
+        if (n.egg) [gd.tx, gd.ty] = pushOutOfEgg(gd.tx, gd.ty, n, gd.kind);
       }
       break;
     }
@@ -192,6 +203,7 @@ function updateGuard(g: GameData, n: Nest, dt: number, lay: PlotLayout) {
       break;
     }
   }
+  if (n.egg) [gd.x, gd.y] = pushOutOfEgg(gd.x, gd.y, n, gd.kind);
 }
 
 function buildCands(g: GameData, lay: PlotLayout, openShop: () => void): Cand[] {
@@ -549,7 +561,7 @@ function render(ctx: CanvasRenderingContext2D, g: GameData, cw: number, ch: numb
     const total = hatchTime(h.sp), done = h.t >= total, info = TIER_INFO[SPECIES[h.sp].tier];
     items.push({ y: pos.y + 10, draw: () => {
       const pop = 1 + 0.3 * Math.sin(((g.slotPop[i] ?? 0) / 0.35) * Math.PI);
-      if (done) { shadow(ctx, pos.x, pos.y + 14, SPECIES[h.sp].size * 0.34, 0.28); drawAnimal(ctx, `${h.sp}_idle`, frameOf(now, 10, i * 3), pos.x, pos.y + 14, SPECIES[h.sp].size * 0.8 * pop, false); label(ctx, 'READY!', pos.x, pos.y - 56, 12, '#ffe14a'); return; }
+      if (done) { shadow(ctx, pos.x, pos.y + 14, SPECIES[h.sp].size * 0.3, 0.28); drawAnimal(ctx, `${h.sp}_idle`, frameOf(now, 10, i * 3), pos.x, pos.y + 14, (30 + SPECIES[h.sp].size * 0.55) * pop, false); label(ctx, 'READY!', pos.x, pos.y - 56, 12, '#ffe14a'); return; }
       const wob = (h.t / total) > 0.7 ? Math.sin(now * 0.03) * 0.14 : Math.sin(now * 0.006 + i) * 0.03;
       drawEgg(ctx, h.sp, h.v ?? 0, pos.x, pos.y + 12, info.eggH * 0.9 * pop, wob, 1, pos.y + 14);
       ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(pos.x - 28, pos.y + 22, 56, 8);
@@ -561,7 +573,7 @@ function render(ctx: CanvasRenderingContext2D, g: GameData, cw: number, ch: numb
     const pet = g.save.pen[i]; if (!pet) return;
     const hop = g.payT[i] < 0.25 ? Math.sin((g.payT[i] / 0.25) * Math.PI) * 10 : 0;
     items.push({ y: pos.y + (g.wander[i] ? g.wander[i].oy : 20), draw: () => {
-      const sz = Math.min(84, SPECIES[pet.sp].size * 0.72);
+      const sz = 34 + SPECIES[pet.sp].size * 0.42;      // still bigger for rarer pets, but fits the pen square
       const w = g.wander[i], wx = pos.x + (w ? w.ox : 0), wy = pos.y + (w ? w.oy : 24);
       const key = w && w.moving ? (pet.sp === 'wolf' ? 'wolf_sneak_walk' : `${pet.sp}_walk`) : `${pet.sp}_idle`;
       shadow(ctx, wx, wy - 2, sz * 0.4, 0.22);
