@@ -50,7 +50,7 @@ export const BASE_SPEED = 180;
 export const PLAYER_SIZE = 72;
 
 export interface Pet { sp: Species; lv: number }
-export interface HatchSlot { sp: Species; t: number }          // egg hatching: t = seconds elapsed
+export interface HatchSlot { sp: Species; t: number; v?: number }   // egg hatching: t = seconds elapsed, v = which egg design
 export interface Save {
   cash: number; speed: number; treadLv: number; plotLv: number; extraSlots: number; penUpg: number; armsLv: number;
   hatch: (HatchSlot | null)[]; pen: (Pet | null)[]; fuseIn: Pet[]; fuseOut: Pet | null; carry: { kind: 'pet'; pet: Pet } | null;
@@ -126,7 +126,7 @@ export function loadSave(): Save {
     s.treadLv = num(d.treadLv, 0, 0, TREAD_RATES.length - 1); s.plotLv = num(d.plotLv, 0, 0, SHOP.plot.costs.length);
     s.extraSlots = num(d.extraSlots, 0, 0, SHOP.slot.costs.length); s.penUpg = num(d.penUpg, 0, 0, SHOP.pen.costs.length);
     s.armsLv = num(d.armsLv, 0, 0, SHOP.arms.costs.length);
-    if (Array.isArray(d.hatch)) s.hatch = d.hatch.map((h: { sp?: unknown; t?: unknown } | null) => (h && okSp(h.sp) ? { sp: h.sp, t: num(h.t, 0) } : null));
+    if (Array.isArray(d.hatch)) s.hatch = d.hatch.map((h: { sp?: unknown; t?: unknown; v?: unknown } | null) => (h && okSp(h.sp) ? { sp: h.sp, t: num(h.t, 0), v: num(h.v, 0, 0, 50) } : null));
     if (Array.isArray(d.pen)) s.pen = d.pen.map(pet);
     if (Array.isArray(d.fuseIn)) s.fuseIn = d.fuseIn.map(pet).filter((p: Pet | null): p is Pet => !!p).slice(0, 3);
     s.fuseOut = pet(d.fuseOut);

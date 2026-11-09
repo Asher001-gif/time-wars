@@ -26,3 +26,10 @@ export function preloadStealEgg(): Promise<void> {
   }
   return loading;
 }
+
+/** how many egg designs exist for a species (files are named like "chicken_0", "chicken_1", ...) */
+export function eggVariantCount(sp: string): number {
+  let n = 0;
+  while (eggImgs[`${sp}_${n}`]) n++;
+  return Math.max(1, n);
+}

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import DraggableExitButton from './DraggableExitButton';
 import RotateDevicePrompt from './RotateDevicePrompt';
 import { useIsMobileDevice, useIsPortrait } from '@/hooks/use-device';
-import { botImg, eggImgs, preloadStealEgg, SHEET, sheetImgs } from '@/game/stealEggAssets';
+import { botImg, eggImgs, eggVariantCount, preloadStealEgg, SHEET, sheetImgs } from '@/game/stealEggAssets';
 import {
   BASE_SPEED, CYCLE_LEN, DAY_LEN, MAX_PET_LEVEL, NIGHT_HATCH_MULT, PAY_INTERVAL, PLAYER_SIZE, SHOP, SPECIES, SPECIES_BY_TIER, TIERS, TIER_INFO,
   WORLD_H, WORLD_W, clearSave, hatchTime, loadSave, makeDeco, makeNests, newSave, petRate, petSellPrice, petSpeed, plotLayout, shopCost, shopLevel,
@@ -11,18 +11,20 @@ import {
 } from '@/game/stealEgg';
 
 /* ============================== types ============================== */
-type Carry = { kind: 'egg'; sp: Species; nest: number } | { kind: 'pet'; pet: Pet };
+type Carry = { kind: 'egg'; sp: Species; v: number; nest: number } | { kind: 'pet'; pet: Pet };
 type GState = 'patrol' | 'alert' | 'chase' | 'return' | 'hit';
-interface Guard { x: number; y: number; hx: number; hy: number; kind: 'dog' | 'wolf'; state: GState; tx: number; ty: number; wait: number; face: number; timer: number; moving: boolean }
-interface Nest { x: number; y: number; tier: Tier; egg: Species | null; guard: Guard }
+interface Guard { x: number; y: number; hx: number; hy: number; kind: Species; state: GState; tx: number; ty: number; wait: number; face: number; timer: number; moving: boolean }
+interface Nest { x: number; y: number; tier: Tier; egg: Species | null; eggV: number; guard: Guard }
 interface Popup { x: number; y: number; text: string; color: string; life: number }
 interface Cand { x: number; y: number; label: string; run: () => void }
 
-const NOTICE = { dog: 240, wolf: 300 } as const;
+// the guard is the same animal that hatches from the egg it protects (a hen guards a hen's egg, a wolf a wolf's egg ...)
+const bigTier = (t: Tier) => t === 'rare' || t === 'epic';
+const noticeOf = (k: Species) => (bigTier(SPECIES[k].tier) ? 300 : 240);
 const PATROL_R = 170;
-const PATROL_SPEED = { dog: 60, wolf: 78 } as const;
+const patrolSpeedOf = (k: Species) => (bigTier(SPECIES[k].tier) ? 78 : 60);
 const REACH = 78;
-const GUARD_SIZE = { dog: 84, wolf: 98 } as const;
+const guardSizeOf = (k: Species) => Math.max(SPECIES[k].size, 76);
 
 /* ============================== tiny synth ============================== */
 let actx: AudioContext | null = null;
@@ -64,16 +66,17 @@ const fmtMoney = (n: number) => {
 };
 const fmtTime = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 const petLabel = (p: Pet) => `${SPECIES[p.sp].name}${p.lv > 1 ? ` Lv${p.lv}` : ''}`;
+const pickVariant = (sp: Species) => Math.floor(Math.random() * eggVariantCount(sp));
 const pickSpecies = (tier: Tier): Species => { const a = SPECIES_BY_TIER[tier]; return a[Math.floor(Math.random() * a.length)]; };
 
-function makeGuard(x: number, y: number, kind: 'dog' | 'wolf'): Guard {
+function makeGuard(x: number, y: number, kind: Species): Guard {
   return { x, y, hx: x, hy: y, kind, state: 'patrol', tx: x, ty: y, wait: Math.random() * 2, face: -1, timer: 0, moving: false };
 }
 function buildNests(): Nest[] {
-  return makeNests().map(d => ({
-    x: d.x, y: d.y, tier: d.tier, egg: pickSpecies(d.tier),
-    guard: makeGuard(d.x + 60, d.y + 40, TIER_INFO[d.tier].guard),
-  }));
+  return makeNests().map(d => {
+    const egg = pickSpecies(d.tier);
+    return { x: d.x, y: d.y, tier: d.tier, egg, eggV: pickVariant(egg), guard: makeGuard(d.x + 60, d.y + 40, egg) };
+  });
 }
 
 /* ============================== game state ============================== */
@@ -115,12 +118,12 @@ const petBonusSpeed = (g: GameData) => { const s = g.save, lay = plotLayout(s); 
 function popup(g: GameData, x: number, y: number, text: string, color = '#fff') { g.popups.push({ x, y, text, color, life: 1.4 }); }
 
 function resetEggs(g: GameData) {
-  g.nests.forEach(n => { n.egg = pickSpecies(n.tier); n.guard = makeGuard(n.x + 60, n.y + 40, n.guard.kind); });
+  g.nests.forEach(n => { const sp = pickSpecies(n.tier); n.egg = sp; n.eggV = pickVariant(sp); n.guard = makeGuard(n.x + 60, n.y + 40, sp); });
 }
 
 function knockOut(g: GameData, lay: PlotLayout) {
   const c = g.carry;
-  if (c && c.kind === 'egg') { const n = g.nests[c.nest]; if (n && !n.egg) n.egg = c.sp; g.carry = null; }
+  if (c && c.kind === 'egg') { const n = g.nests[c.nest]; if (n && !n.egg) { n.egg = c.sp; n.eggV = c.v; } g.carry = null; }
   g.player.x = lay.spawn.x; g.player.y = lay.spawn.y; g.player.stun = 2.4; g.flash = 1;
   sfx.hit();
 }
@@ -147,9 +150,9 @@ function updateGuard(g: GameData, n: Nest, dt: number, lay: PlotLayout) {
   gd.timer -= dt;
   switch (gd.state) {
     case 'patrol': {
-      if (canSee && dP < NOTICE[gd.kind]) { gd.state = 'alert'; gd.timer = 0.55; gd.moving = false; if (gd.kind === 'dog') sfx.bark(); break; }
+      if (canSee && dP < noticeOf(gd.kind)) { gd.state = 'alert'; gd.timer = 0.55; gd.moving = false; sfx.bark(); break; }
       if (gd.wait > 0) { gd.wait -= dt; gd.moving = false; break; }
-      moveGuard(gd, gd.tx, gd.ty, PATROL_SPEED[gd.kind], dt, lay);
+      moveGuard(gd, gd.tx, gd.ty, patrolSpeedOf(gd.kind), dt, lay);
       if (Math.hypot(gd.tx - gd.x, gd.ty - gd.y) < 6) {
         const a = Math.random() * Math.PI * 2, r = 40 + Math.random() * PATROL_R;
         gd.tx = gd.hx + Math.cos(a) * r; gd.ty = gd.hy + Math.sin(a) * r; gd.wait = 0.8 + Math.random() * 2;
@@ -158,14 +161,14 @@ function updateGuard(g: GameData, n: Nest, dt: number, lay: PlotLayout) {
     }
     case 'alert': { gd.moving = false; if (gd.timer <= 0) gd.state = 'chase'; break; }
     case 'chase': {
-      if (!canSee || dP > NOTICE[gd.kind] * 2.3 || Math.hypot(gd.x - gd.hx, gd.y - gd.hy) > 950) { gd.state = 'return'; break; }
+      if (!canSee || dP > noticeOf(gd.kind) * 2.3 || Math.hypot(gd.x - gd.hx, gd.y - gd.hy) > 950) { gd.state = 'return'; break; }
       moveGuard(gd, p.x, p.y, speed, dt, lay);
       if (dP < 36) { knockOut(g, lay); gd.state = 'hit'; gd.timer = 1.3; gd.moving = false; }
       break;
     }
     case 'hit': { gd.moving = false; if (gd.timer <= 0) gd.state = 'return'; break; }
     case 'return': {
-      if (canSee && dP < NOTICE[gd.kind] * 0.7) { gd.state = 'chase'; break; }
+      if (canSee && dP < noticeOf(gd.kind) * 0.7) { gd.state = 'chase'; break; }
       moveGuard(gd, gd.hx, gd.hy, speed * 0.75, dt, lay);
       if (Math.hypot(gd.hx - gd.x, gd.hy - gd.y) < 8) { gd.state = 'patrol'; gd.wait = 1; }
       break;
@@ -179,14 +182,14 @@ function buildCands(g: GameData, lay: PlotLayout, openShop: () => void): Cand[] 
   g.nests.forEach((n, i) => {
     if (n.egg && !c) out.push({
       x: n.x, y: n.y, label: `Steal ${SPECIES[n.egg].name} egg`,
-      run: () => { const sp = n.egg!; g.carry = { kind: 'egg', sp, nest: i }; n.egg = null; n.guard.state = 'chase'; sfx.grab(); sfx.bark(); popup(g, n.x, n.y - 80, 'Run!', '#ff8a5a'); },
+      run: () => { const sp = n.egg!; g.carry = { kind: 'egg', sp, v: n.eggV, nest: i }; n.egg = null; n.guard.state = 'chase'; sfx.grab(); sfx.bark(); popup(g, n.x, n.y - 80, 'Run!', '#ff8a5a'); },
     });
   });
   // hatch slots
   lay.hatchPos.forEach((pos, i) => {
     const slot = s.hatch[i] ?? null;
     if (!slot && c && c.kind === 'egg') {
-      out.push({ ...pos, label: `Place ${SPECIES[c.sp].name} egg`, run: () => { s.hatch[i] = { sp: c.sp, t: 0 }; g.carry = null; sfx.place(); } });
+      out.push({ ...pos, label: `Place ${SPECIES[c.sp].name} egg`, run: () => { s.hatch[i] = { sp: c.sp, t: 0, v: c.v }; g.carry = null; sfx.place(); } });
     } else if (slot && slot.t >= hatchTime(slot.sp) && !c) {
       out.push({ ...pos, label: `Take ${SPECIES[slot.sp].name}`, run: () => { g.carry = { kind: 'pet', pet: { sp: slot.sp, lv: 1 } }; s.hatch[i] = null; sfx.grab(); } });
     }
@@ -303,8 +306,8 @@ function drawAnimal(ctx: CanvasRenderingContext2D, key: string, frame: number, x
   ctx.drawImage(img, (frame % SHEET.cols) * SHEET.cell, Math.floor(frame / SHEET.cols) * SHEET.cell, SHEET.cell, SHEET.cell, -dw / 2, -dw * 0.9, dw, dw);
   ctx.restore();
 }
-function drawEgg(ctx: CanvasRenderingContext2D, sp: Species, x: number, bottomY: number, h: number, wobble = 0, alpha = 1) {
-  const img = eggImgs[sp];
+function drawEgg(ctx: CanvasRenderingContext2D, sp: Species, v: number, x: number, bottomY: number, h: number, wobble = 0, alpha = 1) {
+  const img = eggImgs[`${sp}_${v % eggVariantCount(sp)}`];
   if (!img || !img.complete || img.naturalWidth === 0) { ctx.fillStyle = '#f4e3c0'; ctx.beginPath(); ctx.ellipse(x, bottomY - h / 2, h * 0.36, h / 2, 0, 0, Math.PI * 2); ctx.fill(); return; }
   const w = (h * img.naturalWidth) / img.naturalHeight;
   ctx.save(); ctx.globalAlpha = alpha; ctx.translate(x, bottomY); ctx.rotate(wobble);
@@ -409,7 +412,7 @@ function drawNest(ctx: CanvasRenderingContext2D, g: GameData, n: Nest, now: numb
   if (n.egg) {
     ctx.strokeStyle = info.color; ctx.lineWidth = 3; ctx.globalAlpha = 0.5 + Math.sin(now * 0.005 + n.x) * 0.25;
     ctx.beginPath(); ctx.ellipse(n.x, n.y + 10, 42, 19, 0, 0, Math.PI * 2); ctx.stroke(); ctx.globalAlpha = 1;
-    drawEgg(ctx, n.egg, n.x, n.y + 14, info.eggH);
+    drawEgg(ctx, n.egg, n.eggV, n.x, n.y + 14, info.eggH);
     const need = Math.ceil(info.guardSpeed + info.weight);
     label(ctx, `${info.label} · need ⚡${need}`, n.x, n.y + 44, 12, pSpeed >= need ? '#9dffb4' : '#ff8a8a');
   } else {
@@ -418,18 +421,18 @@ function drawNest(ctx: CanvasRenderingContext2D, g: GameData, n: Nest, now: numb
 }
 
 function drawGuard(ctx: CanvasRenderingContext2D, n: Nest, now: number, idx: number) {
-  const gd = n.guard, w = gd.kind === 'wolf';
+  const gd = n.guard, sp = gd.kind, wolf = sp === 'wolf', size = guardSizeOf(sp);
   let key: string, fps: number;
   switch (gd.state) {
-    case 'chase': key = w ? 'wolf_run' : 'dog_run_angry'; fps = 20; break;
-    case 'alert': key = w ? 'wolf_idle' : 'dog_bark'; fps = 14; break;
-    case 'hit': key = w ? 'wolf_hit' : 'dog_bark'; fps = 16; break;
-    case 'return': key = w ? 'wolf_flee' : 'dog_run'; fps = 16; break;
-    default: key = gd.moving ? (w ? 'wolf_sneak_walk' : 'dog_walk') : (w ? 'wolf_idle' : 'dog_idle'); fps = gd.moving ? 14 : 9;
+    case 'chase': key = wolf ? 'wolf_run' : `${sp}_run`; fps = 20; break;
+    case 'alert': key = `${sp}_idle`; fps = 14; break;
+    case 'hit': key = wolf ? 'wolf_hit' : `${sp}_idle`; fps = 16; break;
+    case 'return': key = wolf ? 'wolf_flee' : `${sp}_run`; fps = 16; break;
+    default: key = gd.moving ? (wolf ? 'wolf_sneak_walk' : `${sp}_walk`) : `${sp}_idle`; fps = gd.moving ? 14 : 9;
   }
-  shadow(ctx, gd.x, gd.y + 4, GUARD_SIZE[gd.kind] * 0.4);
-  drawAnimal(ctx, key, frameOf(now, fps, idx * 5), gd.x, gd.y, GUARD_SIZE[gd.kind], gd.face > 0);
-  if (gd.state === 'chase' || gd.state === 'alert') label(ctx, '!', gd.x, gd.y - GUARD_SIZE[gd.kind] * 1.0, 28, '#ff4040');
+  shadow(ctx, gd.x, gd.y + 4, size * 0.4);
+  drawAnimal(ctx, key, frameOf(now, fps, idx * 5), gd.x, gd.y, size, gd.face > 0);
+  if (gd.state === 'chase' || gd.state === 'alert') label(ctx, '!', gd.x, gd.y - size * 1.0, 28, '#ff4040');
 }
 
 function drawPlayer(ctx: CanvasRenderingContext2D, g: GameData, now: number) {
@@ -448,7 +451,7 @@ function drawPlayer(ctx: CanvasRenderingContext2D, g: GameData, now: number) {
   const c = g.carry;
   if (c) {
     const cx = p.x + p.face * 36, cy = p.y - size * 0.6 - 4 - bob;
-    if (c.kind === 'egg') drawEgg(ctx, c.sp, cx, cy + 20, TIER_INFO[SPECIES[c.sp].tier].eggH * 0.85, Math.sin(now * 0.012) * 0.12);
+    if (c.kind === 'egg') drawEgg(ctx, c.sp, c.v, cx, cy + 20, TIER_INFO[SPECIES[c.sp].tier].eggH * 0.85, Math.sin(now * 0.012) * 0.12);
     else drawAnimal(ctx, `${c.pet.sp}_idle`, frameOf(now, 10), cx, cy + 34, SPECIES[c.pet.sp].size * 0.6, p.face > 0);
   }
   if (p.stun > 0) label(ctx, '💫', p.x, p.y - size - 18, 22);
@@ -485,7 +488,7 @@ function render(ctx: CanvasRenderingContext2D, g: GameData, cw: number, ch: numb
     items.push({ y: pos.y + 10, draw: () => {
       if (done) { drawAnimal(ctx, `${h.sp}_idle`, frameOf(now, 10, i * 3), pos.x, pos.y + 14, SPECIES[h.sp].size * 0.8, false); label(ctx, 'READY!', pos.x, pos.y - 56, 12, '#ffe14a'); return; }
       const wob = (h.t / total) > 0.7 ? Math.sin(now * 0.03) * 0.14 : Math.sin(now * 0.006 + i) * 0.03;
-      drawEgg(ctx, h.sp, pos.x, pos.y + 12, info.eggH * 0.9, wob);
+      drawEgg(ctx, h.sp, h.v ?? 0, pos.x, pos.y + 12, info.eggH * 0.9, wob);
       ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(pos.x - 28, pos.y + 22, 56, 8);
       ctx.fillStyle = info.color; ctx.fillRect(pos.x - 27, pos.y + 23, 54 * (h.t / total), 6);
       label(ctx, fmtTime(Math.ceil(total - h.t)), pos.x, pos.y + 46, 11);
@@ -593,10 +596,10 @@ export default function StealEggGame({ onExit }: { onExit: () => void }) {
       const k = e.key.toLowerCase(), i = inpRef.current;
       if (k === 'w' || k === 'arrowup') i.up = v; else if (k === 's' || k === 'arrowdown') i.down = v;
       else if (k === 'a' || k === 'arrowleft') i.left = v; else if (k === 'd' || k === 'arrowright') i.right = v;
-      else if ((k === 'e' || k === ' ' || k === 'enter') && v && !e.repeat) i.act = true;
+      else if ((k === 'e' || k === '5' || k === 'enter') && v && !e.repeat) i.act = true;
       else if (k === 'escape' && v) closeShop();
       else return;
-      if (k.startsWith('arrow') || k === ' ') e.preventDefault();
+      if (k.startsWith('arrow')) e.preventDefault();
     };
     const d = (e: KeyboardEvent) => set(e, true), u = (e: KeyboardEvent) => set(e, false);
     window.addEventListener('keydown', d); window.addEventListener('keyup', u);
@@ -681,7 +684,7 @@ export default function StealEggGame({ onExit }: { onExit: () => void }) {
           <div className="px-5 py-4 rounded-2xl bg-black/80 border-2 border-yellow-300 font-mono text-center text-white max-w-2xl">
             <div className="font-bold text-lg sm:text-2xl">Steal an egg. Outrun the guard. Hatch it at home.</div>
             <div className="text-xs sm:text-sm mt-2 opacity-85">
-              {isMobile ? 'Joystick to move • ACTION button to grab / place / sell' : 'WASD / arrows move • E or SPACE to grab, place, sell and open the shop'}
+              {isMobile ? 'Joystick to move • ACTION button to grab / place / sell' : 'WASD / arrows move • E or 5 to grab, place, sell and open the shop'}
               <br />Stand on the treadmill to get faster — heavier eggs need more speed. Pets in your pen earn cash.
             </div>
           </div>
