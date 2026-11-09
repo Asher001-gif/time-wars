@@ -15,6 +15,7 @@ type Carry = { kind: 'egg'; sp: Species; v: number; nest: number } | { kind: 'pe
 type GState = 'patrol' | 'alert' | 'chase' | 'return' | 'hit';
 interface Guard { x: number; y: number; hx: number; hy: number; kind: Species; state: GState; tx: number; ty: number; wait: number; face: number; timer: number; moving: boolean }
 interface Nest { x: number; y: number; tier: Tier; egg: Species | null; eggV: number; guard: Guard }
+interface Wander { sp: string; ox: number; oy: number; tx: number; ty: number; wait: number; face: boolean; moving: boolean }
 interface Particle { x: number; y: number; vx: number; vy: number; life: number; max: number; size: number; color: string; grav: number; kind: 'dot' | 'coin' | 'ring' | 'star' }
 interface Popup { x: number; y: number; text: string; color: string; life: number }
 interface Cand { x: number; y: number; label: string; run: () => void }
@@ -91,7 +92,7 @@ interface GameData {
   payT: number[]; popups: Popup[];
   saveT: number; flash: number; lastPrompt: string;
   nightMsg: number; tip: number;
-  parts: Particle[]; shake: number; cashPulse: number; lastCash: number; slotPop: Record<number, number>; carryPop: number; prevCarry: Carry | null;
+  wander: Wander[]; parts: Particle[]; shake: number; cashPulse: number; lastCash: number; slotPop: Record<number, number>; carryPop: number; prevCarry: Carry | null;
 }
 
 function createData(): GameData {
@@ -104,7 +105,7 @@ function createData(): GameData {
     carry: save.carry ? { kind: 'pet', pet: save.carry.pet } : null,
     cycleT: 0, t: 0, wasNight: false,
     payT: Array.from({ length: 200 }, (_, i) => (i * 0.37) % PAY_INTERVAL), popups: [], saveT: 0, flash: 0, lastPrompt: '', nightMsg: 0, tip: 0,
-    parts: [], shake: 0, cashPulse: 0, lastCash: save.cash, slotPop: {}, carryPop: 0, prevCarry: null,
+    wander: [], parts: [], shake: 0, cashPulse: 0, lastCash: save.cash, slotPop: {}, carryPop: 0, prevCarry: null,
   };
 }
 
@@ -313,6 +314,18 @@ function update(g: GameData, dt: number, inp: Input, lay: PlotLayout, openShop: 
   if (p.onTread && Math.random() < dt * 14) burst(g, p.x - p.face * 20, p.y + 4, ['#ffe14a', '#ffffff'], 1, 70, { up: 90, size: 3 });
   if (p.moving && p.stun <= 0 && Math.random() < dt * 6) burst(g, p.x, p.y + 6, ['rgba(255,255,255,0.5)'], 1, 30, { grav: 0, size: 3 });
   for (let i = 0; i < lay.hatchPos.length; i++) { const h = s.hatch[i]; if (h && h.t >= hatchTime(h.sp) && Math.random() < dt * 2.5) burst(g, lay.hatchPos[i].x + (Math.random() - 0.5) * 40, lay.hatchPos[i].y - 30 - Math.random() * 30, ['#ffe14a', '#ffffff'], 1, 25, { grav: -30, size: 3, kind: 'star' }); }
+  // pen pets stroll around inside their own square so the pen looks alive
+  for (let i = 0; i < lay.penPos.length; i++) {
+    const pet = s.pen[i];
+    if (!pet) { delete g.wander[i]; continue; }
+    let w = g.wander[i];
+    if (!w || w.sp !== pet.sp) w = g.wander[i] = { sp: pet.sp, ox: (Math.random() - 0.5) * 30, oy: 18 + Math.random() * 10, tx: 0, ty: 0, wait: Math.random() * 2, face: Math.random() < 0.5, moving: false };
+    if (w.wait > 0) { w.wait -= dt; w.moving = false; if (w.wait <= 0) { w.tx = (Math.random() - 0.5) * 48; w.ty = 8 + Math.random() * 28; } continue; }
+    const dx = w.tx - w.ox, dy = w.ty - w.oy, d = Math.hypot(dx, dy);
+    if (d < 2) { w.wait = 0.8 + Math.random() * 2.5; w.moving = false; continue; }
+    const st = Math.min(d, 26 * dt); w.ox += (dx / d) * st; w.oy += (dy / d) * st; w.moving = true;
+    if (Math.abs(dx) > 1) w.face = dx > 0;
+  }
   for (const q of g.parts) { q.life -= dt; q.x += q.vx * dt; q.y += q.vy * dt; q.vy += q.grav * dt; q.vx *= 1 - Math.min(1, dt * 1.5); }
   g.parts = g.parts.filter(q => q.life > 0);
   // floating texts
@@ -547,10 +560,12 @@ function render(ctx: CanvasRenderingContext2D, g: GameData, cw: number, ch: numb
   lay.penPos.forEach((pos, i) => {
     const pet = g.save.pen[i]; if (!pet) return;
     const hop = g.payT[i] < 0.25 ? Math.sin((g.payT[i] / 0.25) * Math.PI) * 10 : 0;
-    items.push({ y: pos.y + 20, draw: () => {
+    items.push({ y: pos.y + (g.wander[i] ? g.wander[i].oy : 20), draw: () => {
       const sz = Math.min(84, SPECIES[pet.sp].size * 0.72);
-      shadow(ctx, pos.x, pos.y + 22, sz * 0.4, 0.2);
-      drawAnimal(ctx, `${pet.sp}_idle`, frameOf(now, 10, i * 4), pos.x, pos.y + 24 - hop, sz, i % 2 === 0);
+      const w = g.wander[i], wx = pos.x + (w ? w.ox : 0), wy = pos.y + (w ? w.oy : 24);
+      const key = w && w.moving ? (pet.sp === 'wolf' ? 'wolf_sneak_walk' : `${pet.sp}_walk`) : `${pet.sp}_idle`;
+      shadow(ctx, wx, wy - 2, sz * 0.4, 0.22);
+      drawAnimal(ctx, key, frameOf(now, w && w.moving ? 12 : 10, i * 4), wx, wy - hop, sz, w ? w.face : i % 2 === 0);
       if (pet.lv > 1) label(ctx, `Lv${pet.lv}`, pos.x, pos.y - 40, 11, '#ffe14a');
     } });
   });
