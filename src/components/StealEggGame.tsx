@@ -24,6 +24,8 @@ interface Cand { x: number; y: number; label: string; run: () => void }
 const bigTier = (t: Tier) => t === 'rare' || t === 'epic';
 const noticeOf = (k: Species) => (bigTier(SPECIES[k].tier) ? 300 : 240);
 const PATROL_R = 170;
+// "sprint" mode: you move slowly, but guards notice you from much closer, so you can creep up to the animals
+const SPRINT_SLOW = 0.55, SPRINT_NOTICE = 0.45;
 const patrolSpeedOf = (k: Species) => (bigTier(SPECIES[k].tier) ? 78 : 60);
 const REACH = 78;
 const guardSizeOf = (k: Species) => SPECIES[k].size * 1.15;           // bigger animal = rarer animal (sizes are set per species in stealEgg.ts)
@@ -96,7 +98,7 @@ interface GameData {
   save: Save;
   nests: Nest[];
   deco: ReturnType<typeof makeDeco>;
-  player: { x: number; y: number; face: number; stun: number; moving: boolean; onTread: boolean };
+  player: { x: number; y: number; face: number; stun: number; moving: boolean; onTread: boolean; sprint: boolean };
   carry: Carry | null;
   cycleT: number; t: number; wasNight: boolean;
   payT: number[]; popups: Popup[];
@@ -111,7 +113,7 @@ function createData(): GameData {
   const nests = buildNests();
   return {
     save, nests, deco: makeDeco(nests.map(n => ({ x: n.x, y: n.y, tier: n.tier }))),
-    player: { x: lay.spawn.x, y: lay.spawn.y, face: 1, stun: 0, moving: false, onTread: false },
+    player: { x: lay.spawn.x, y: lay.spawn.y, face: 1, stun: 0, moving: false, onTread: false, sprint: false },
     carry: save.carry ? { kind: 'pet', pet: save.carry.pet } : null,
     cycleT: 0, t: 0, wasNight: false,
     payT: Array.from({ length: 200 }, (_, i) => (i * 0.37) % PAY_INTERVAL), popups: [], saveT: 0, flash: 0, lastPrompt: '', nightMsg: 0, tip: 0,
@@ -125,7 +127,8 @@ function effSpeed(g: GameData): number {
   let v = s.speed;
   for (let i = 0; i < lay.penPos.length; i++) { const p = s.pen[i]; if (p) v += petSpeed(p); }
   if (g.carry && g.carry.kind === 'egg') v -= weightPenalty(SPECIES[g.carry.sp].tier, s.armsLv);
-  return Math.max(40, v);
+  v = Math.max(40, v);
+  return g.player.sprint ? Math.max(30, v * SPRINT_SLOW) : v;
 }
 const petBonusSpeed = (g: GameData) => { const s = g.save, lay = plotLayout(s); let v = s.speed; for (let i = 0; i < lay.penPos.length; i++) { const p = s.pen[i]; if (p) v += petSpeed(p); } return v; };
 
@@ -151,7 +154,7 @@ function resetEggs(g: GameData) {
 function knockOut(g: GameData, lay: PlotLayout) {
   const c = g.carry;
   if (c && c.kind === 'egg') { const n = g.nests[c.nest]; if (n && !n.egg) { n.egg = c.sp; n.eggV = c.v; } g.carry = null; }
-  g.player.x = lay.spawn.x; g.player.y = lay.spawn.y; g.player.stun = 2.4; g.flash = 1;
+  g.player.x = lay.spawn.x; g.player.y = lay.spawn.y; g.player.stun = 2.4; g.player.sprint = false; g.flash = 1;
   sfx.hit();
   burst(g, g.player.x, g.player.y - 40, ['#ff4a4a', '#ffb0b0', '#ffffff'], 24, 260, { up: 100 }); shakeIt(g, 0.9);
 }
@@ -178,7 +181,7 @@ function updateGuard(g: GameData, n: Nest, dt: number, lay: PlotLayout) {
   gd.timer -= dt;
   switch (gd.state) {
     case 'patrol': {
-      if (canSee && dP < noticeOf(gd.kind)) { gd.state = 'alert'; gd.timer = 0.55; gd.moving = false; sfx.bark(); break; }
+      if (canSee && dP < noticeOf(gd.kind) * (p.sprint ? SPRINT_NOTICE : 1)) { gd.state = 'alert'; gd.timer = 0.55; gd.moving = false; sfx.bark(); break; }
       if (gd.wait > 0) { gd.wait -= dt; gd.moving = false; break; }
       moveGuard(gd, gd.tx, gd.ty, patrolSpeedOf(gd.kind), dt, lay);
       if (Math.hypot(gd.tx - gd.x, gd.ty - gd.y) < 6) {
@@ -314,6 +317,7 @@ function update(g: GameData, dt: number, inp: Input, lay: PlotLayout, openShop: 
   }
   g.lastPrompt = best ? best.label : '';
   if (inp.act) { inp.act = false; if (best) best.run(); }
+  if (inp.sprintTog) { inp.sprintTog = false; if (p.stun <= 0) { p.sprint = !p.sprint; sfx.place(); } }
 
   // game feel
   if (s.cash > g.lastCash + 0.001) g.cashPulse = 1;
@@ -323,8 +327,6 @@ function update(g: GameData, dt: number, inp: Input, lay: PlotLayout, openShop: 
   if (g.carry !== g.prevCarry) { if (g.carry) g.carryPop = 0.3; g.prevCarry = g.carry; }
   g.carryPop = Math.max(0, g.carryPop - dt);
   for (const k of Object.keys(g.slotPop)) { g.slotPop[+k] -= dt; if (g.slotPop[+k] <= 0) delete g.slotPop[+k]; }
-  if (p.onTread && Math.random() < dt * 14) burst(g, p.x - p.face * 20, p.y + 4, ['#ffe14a', '#ffffff'], 1, 70, { up: 90, size: 3 });
-  if (p.moving && p.stun <= 0 && Math.random() < dt * 6) burst(g, p.x, p.y + 6, ['rgba(255,255,255,0.5)'], 1, 30, { grav: 0, size: 3 });
   for (let i = 0; i < lay.hatchPos.length; i++) { const h = s.hatch[i]; if (h && h.t >= hatchTime(h.sp) && Math.random() < dt * 2.5) burst(g, lay.hatchPos[i].x + (Math.random() - 0.5) * 40, lay.hatchPos[i].y - 30 - Math.random() * 30, ['#ffe14a', '#ffffff'], 1, 25, { grav: -30, size: 3, kind: 'star' }); }
   // pen pets stroll around inside their own square so the pen looks alive
   for (let i = 0; i < lay.penPos.length; i++) {
@@ -629,7 +631,7 @@ function drawHud(ctx: CanvasRenderingContext2D, g: GameData, cw: number, ch: num
 }
 
 /* ============================== input + UI ============================== */
-interface Input { up: boolean; down: boolean; left: boolean; right: boolean; ax: number; ay: number; act: boolean }
+interface Input { up: boolean; down: boolean; left: boolean; right: boolean; ax: number; ay: number; act: boolean; sprintTog: boolean }
 
 function Joystick({ onMove }: { onMove: (x: number, y: number) => void }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -651,11 +653,12 @@ function Joystick({ onMove }: { onMove: (x: number, y: number) => void }) {
 export default function StealEggGame({ onExit }: { onExit: () => void }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const gRef = useRef<GameData | null>(null);
-  const inpRef = useRef<Input>({ up: false, down: false, left: false, right: false, ax: 0, ay: 0, act: false });
+  const inpRef = useRef<Input>({ up: false, down: false, left: false, right: false, ax: 0, ay: 0, act: false, sprintTog: false });
   const shopRef = useRef(false);
   const [ready, setReady] = useState(false);
   const [shopOpen, setShopOpen] = useState(false);
   const [prompt, setPrompt] = useState('');
+  const [sprint, setSprint] = useState(false);
   const [banner, setBanner] = useState(true);
   const [mute, setMute] = useState(muted);
   const [, force] = useState(0);
@@ -685,6 +688,7 @@ export default function StealEggGame({ onExit }: { onExit: () => void }) {
       if (k === 'w' || k === 'arrowup') i.up = v; else if (k === 's' || k === 'arrowdown') i.down = v;
       else if (k === 'a' || k === 'arrowleft') i.left = v; else if (k === 'd' || k === 'arrowright') i.right = v;
       else if ((k === 'e' || k === '5' || k === 'enter') && v && !e.repeat) i.act = true;
+      else if ((k === '0' || k === ')') && v && !e.repeat) i.sprintTog = true;
       else if (k === 'escape' && v) closeShop();
       else return;
       if (k.startsWith('arrow')) e.preventDefault();
@@ -715,6 +719,7 @@ export default function StealEggGame({ onExit }: { onExit: () => void }) {
         render(ctx, g, cw, ch, dpr, now);
       } catch (err) { console.error('stealegg frame failed', err); }
       setPrompt(p => (p === g.lastPrompt ? p : g.lastPrompt));
+      setSprint(v => (v === g.player.sprint ? v : g.player.sprint));
     };
     raf = requestAnimationFrame(frame);
     return () => { cancelAnimationFrame(raf); window.removeEventListener('resize', resize); document.removeEventListener('visibilitychange', vis); window.removeEventListener('pagehide', save); save(); };
@@ -772,10 +777,22 @@ export default function StealEggGame({ onExit }: { onExit: () => void }) {
           <div className="px-5 py-4 rounded-2xl bg-black/80 border-2 border-yellow-300 font-mono text-center text-white max-w-2xl">
             <div className="font-bold text-lg sm:text-2xl">Steal an egg. Outrun the guard. Hatch it at home.</div>
             <div className="text-xs sm:text-sm mt-2 opacity-85">
-              {isMobile ? 'Joystick to move • ACTION button to grab / place / sell' : 'WASD / arrows move • E or 5 to grab, place, sell and open the shop'}
+              {isMobile ? 'Joystick to move • ACTION button to grab / place / sell' : 'WASD / arrows move • E or 5 to grab, place, sell and open the shop • 0 or ) to sprint (slow, but you can sneak close to animals)'}
               <br />Stand on the treadmill to get faster — heavier eggs need more speed. Pets in your pen earn cash.
             </div>
           </div>
+        </div>
+      )}
+
+      {!shopOpen && (
+        <div className="fixed inset-x-0 z-[56] flex justify-center pointer-events-none" style={{ bottom: isMobile ? 12 : 76 }}>
+          <button
+            className={`pointer-events-auto select-none rounded-full px-3 py-1 text-[11px] font-mono font-bold border ${sprint ? 'bg-orange-500/90 border-white text-white' : 'bg-black/55 border-white/40 text-white/90'}`}
+            style={{ touchAction: 'none' }}
+            onPointerDown={e => { e.preventDefault(); unlockAudio(); inpRef.current.sprintTog = true; }}
+          >
+            {sprint ? 'SPRINT ON · slow, guards notice late' : isMobile ? 'SPRINT' : 'Press 0 / ) to sprint'}
+          </button>
         </div>
       )}
 
