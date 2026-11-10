@@ -125,7 +125,7 @@ function createData(): GameData {
   };
 }
 
-function effSpeed(g: GameData): number {
+function effSpeed(g: GameData, homeCap = true): number {
   const s = g.save;
   const lay = plotLayout(s);
   let v = s.speed;
@@ -133,7 +133,7 @@ function effSpeed(g: GameData): number {
   if (g.carry && g.carry.kind === 'egg') v *= 1 - weightPenalty(g.carry.sp, s.armsLv);   // rarer egg = slower
   v = Math.max(40, v);
   if (g.player.inPit) v *= PIT_SLOW;                              // stuck in a dirt pit
-  if (inSafe(lay, g.player.x, g.player.y)) v = Math.min(v, SAFE_SPEED);   // inside your base your speed is always 500
+  if (homeCap && inSafe(lay, g.player.x, g.player.y)) v = Math.min(v, SAFE_SPEED);   // inside your base you MOVE at 500 (the HUD still shows your real speed)
   return g.player.sprint ? Math.min(v, SAFE_SPEED) : v;                    // sprint on: speed 500 again
 }
 const petBonusSpeed = (g: GameData) => { const s = g.save, lay = plotLayout(s); let v = s.speed; for (let i = 0; i < lay.penPos.length; i++) { const p = s.pen[i]; if (p) v += petSpeed(p); } return v; };
@@ -783,7 +783,7 @@ function render(ctx: CanvasRenderingContext2D, g: GameData, cw: number, ch: numb
 }
 
 function drawHud(ctx: CanvasRenderingContext2D, g: GameData, cw: number, ch: number, night: boolean) {
-  const s = g.save, sp = effSpeed(g);
+  const s = g.save, sp = effSpeed(g, false);       // real speed; only sprint shows 500
   ctx.textAlign = 'left';
   ctx.fillStyle = 'rgba(0,0,0,0.6)'; rrect(ctx, 12, 54, 210, 70, 10); ctx.fill();
   ctx.save(); ctx.translate(24, 82); ctx.scale(1 + 0.3 * g.cashPulse, 1 + 0.3 * g.cashPulse); ctx.font = 'bold 22px monospace'; ctx.fillStyle = g.cashPulse > 0.3 ? '#eaffef' : '#7dff9a'; ctx.fillText(fmtMoney(s.cash), 0, 0); ctx.restore();
@@ -801,6 +801,7 @@ function drawHud(ctx: CanvasRenderingContext2D, g: GameData, cw: number, ch: num
   ctx.fillText(night ? `🌙 NIGHT ${Math.ceil(left)}s` : `☀ Eggs reset in ${fmtTime(left)}`, bx + bw / 2, 28);
   if (g.nightMsg > 0) { ctx.globalAlpha = Math.min(1, g.nightMsg); label(ctx, `🌙 Night: eggs hatch ${NIGHT_HATCH_MULT}× faster!`, cw / 2, 90, 24, '#bcd0ff'); ctx.globalAlpha = 1; }
   if (g.player.stun > 0) label(ctx, 'KNOCKED OUT!', cw / 2, ch / 2 - 60, 40, '#ff6a6a');
+  if (inSafe(plotLayout(s), g.player.x, g.player.y)) { ctx.save(); ctx.textAlign = 'center'; ctx.globalAlpha = 0.85; label(ctx, 'Speed is set to stable at home.', cw / 2, ch - 18, 12, '#9dffb4'); ctx.restore(); }
 }
 
 /* ============================== input + UI ============================== */
