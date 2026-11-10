@@ -2,8 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import DraggableExitButton from './DraggableExitButton';
 import RotateDevicePrompt from './RotateDevicePrompt';
 import { useIsMobileDevice, useIsPortrait } from '@/hooks/use-device';
-import { botImg, eggImgs, eggVariantCount, preloadStealEgg, SHEET, sheetImgs } from '@/game/stealEggAssets';
+import { botImg, eggImgs, eggVariantCount, MONSTER, monsterImgs, preloadStealEgg, SHEET, sheetImgs } from '@/game/stealEggAssets';
 import {
+  HELL_X, HELL_SPECIES_BY_TIER, HELL_TIER_INFO, LAVA_RATES, infoOf, lavaRate, type Realm,
   BASE_SPEED, CYCLE_LEN, DAY_LEN, MAX_PET_LEVEL, NIGHT_HATCH_MULT, PAY_INTERVAL, PLAYER_SIZE, SHOP, SPECIES, SPECIES_BY_TIER, TIERS, TIER_INFO,
   WORLD_H, WORLD_W, clearSave, hatchTime, loadSave, makeDeco, makeNests, newSave, petRate, petSellPrice, petSpeed, plotLayout, shopCost, shopLevel,
   treadRate, weightPenalty, writeSave, makePits, inPit, PIT_SLOW, PIT_SQUASH, type Pit,
@@ -14,7 +15,7 @@ import {
 type Carry = { kind: 'egg'; sp: Species; v: number; nest: number } | { kind: 'pet'; pet: Pet };
 type GState = 'patrol' | 'alert' | 'chase' | 'return' | 'hit';
 interface Guard { x: number; y: number; hx: number; hy: number; kind: Species; state: GState; tx: number; ty: number; wait: number; face: number; timer: number; moving: boolean }
-interface Nest { x: number; y: number; tier: Tier; egg: Species | null; eggV: number; guard: Guard }
+interface Nest { x: number; y: number; tier: Tier; realm: Realm; egg: Species | null; eggV: number; guard: Guard }
 interface Wander { sp: string; ox: number; oy: number; tx: number; ty: number; wait: number; face: boolean; moving: boolean }
 interface Particle { x: number; y: number; vx: number; vy: number; life: number; max: number; size: number; color: string; grav: number; kind: 'dot' | 'coin' | 'ring' | 'star' }
 interface Popup { x: number; y: number; text: string; color: string; life: number }
@@ -22,13 +23,13 @@ interface Cand { x: number; y: number; label: string; run: () => void }
 
 // the guard is the same animal that hatches from the egg it protects (a hen guards a hen's egg, a wolf a wolf's egg ...)
 const bigTier = (t: Tier) => t === 'rare' || t === 'epic';
-const noticeOf = (k: Species) => (bigTier(SPECIES[k].tier) ? 300 : 240);
+const noticeOf = (k: Species) => (SPECIES[k].hell ? (SPECIES[k].tier === 'rare' ? 520 : SPECIES[k].tier === 'uncommon' ? 440 : 380) : bigTier(SPECIES[k].tier) ? 300 : 240);
 const PATROL_R = 170;
 // "sprint" mode: you move slowly, but guards notice you from much closer, so you can creep up to the animals
 const SPRINT_SLOW = 0.55, SPRINT_NOTICE = 0.45;
-const patrolSpeedOf = (k: Species) => (bigTier(SPECIES[k].tier) ? 78 : 60);
+const patrolSpeedOf = (k: Species) => (SPECIES[k].hell ? 110 : bigTier(SPECIES[k].tier) ? 78 : 60);
 const REACH = 78;
-const guardSizeOf = (k: Species) => SPECIES[k].size * 1.15;           // bigger animal = rarer animal (sizes are set per species in stealEgg.ts)
+const guardSizeOf = (k: Species) => SPECIES[k].size * (SPECIES[k].hell ? 1 : 1.15);           // bigger animal = rarer animal (sizes are set per species in stealEgg.ts)
 const eggKeepOut = (k: Species) => 46 + guardSizeOf(k) * 0.28;          // a guard can never walk into the egg it protects
 const EGG_SQUASH = 1.5;                                                   // top-down view: the keep-out circle is squashed in y
 function pushOutOfEgg(x: number, y: number, n: Nest, k: Species): [number, number] {
@@ -80,7 +81,7 @@ const fmtMoney = (n: number) => {
 const fmtTime = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 const petLabel = (p: Pet) => `${SPECIES[p.sp].name}${p.lv > 1 ? ` Lv${p.lv}` : ''}`;
 const pickVariant = (sp: Species) => Math.floor(Math.random() * eggVariantCount(sp));
-const pickSpecies = (tier: Tier): Species => { const a = SPECIES_BY_TIER[tier]; return a[Math.floor(Math.random() * a.length)]; };
+const pickSpecies = (tier: Tier, realm: Realm = 'farm'): Species => { const a = (realm === 'hell' ? HELL_SPECIES_BY_TIER[tier] : SPECIES_BY_TIER[tier]) ?? SPECIES_BY_TIER[tier]; return a[Math.floor(Math.random() * a.length)]; };
 
 function makeGuard(nx: number, ny: number, kind: Species): Guard {
   const R = eggKeepOut(kind) + 16, x = nx + 0.8 * R, y = ny + 10 + 0.6 * R / EGG_SQUASH;   // home spot sits just outside the egg
@@ -88,8 +89,8 @@ function makeGuard(nx: number, ny: number, kind: Species): Guard {
 }
 function buildNests(): Nest[] {
   return makeNests().map(d => {
-    const egg = pickSpecies(d.tier);
-    return { x: d.x, y: d.y, tier: d.tier, egg, eggV: pickVariant(egg), guard: makeGuard(d.x, d.y, egg) };
+    const egg = pickSpecies(d.tier, d.realm);
+    return { x: d.x, y: d.y, tier: d.tier, realm: d.realm, egg, eggV: pickVariant(egg), guard: makeGuard(d.x, d.y, egg) };
   });
 }
 
@@ -99,7 +100,7 @@ interface GameData {
   nests: Nest[];
   deco: ReturnType<typeof makeDeco>;
   pits: Pit[];
-  player: { x: number; y: number; face: number; stun: number; moving: boolean; onTread: boolean; inPit: boolean; sprint: boolean; sprintLock: boolean };
+  player: { x: number; y: number; face: number; stun: number; moving: boolean; onTread: boolean; onLava: boolean; inPit: boolean; sprint: boolean; sprintLock: boolean };
   carry: Carry | null;
   cycleT: number; t: number; wasNight: boolean;
   payT: number[]; popups: Popup[];
@@ -113,8 +114,8 @@ function createData(): GameData {
   const lay = plotLayout(save);
   const nests = buildNests();
   return {
-    save, nests, deco: makeDeco(nests.map(n => ({ x: n.x, y: n.y, tier: n.tier }))), pits: makePits(nests.map(n => ({ x: n.x, y: n.y, tier: n.tier }))),
-    player: { x: lay.spawn.x, y: lay.spawn.y, face: 1, stun: 0, moving: false, onTread: false, inPit: false, sprint: false, sprintLock: false },
+    save, nests, deco: makeDeco(nests.map(n => ({ x: n.x, y: n.y, tier: n.tier, realm: n.realm }))), pits: makePits(nests.map(n => ({ x: n.x, y: n.y, tier: n.tier, realm: n.realm }))),
+    player: { x: lay.spawn.x, y: lay.spawn.y, face: 1, stun: 0, moving: false, onTread: false, onLava: false, inPit: false, sprint: false, sprintLock: false },
     carry: save.carry ? { kind: 'pet', pet: save.carry.pet } : null,
     cycleT: 0, t: 0, wasNight: false,
     payT: Array.from({ length: 200 }, (_, i) => (i * 0.37) % PAY_INTERVAL), popups: [], saveT: 0, flash: 0, lastPrompt: '', nightMsg: 0, tip: 0,
@@ -127,7 +128,7 @@ function effSpeed(g: GameData): number {
   const lay = plotLayout(s);
   let v = s.speed;
   for (let i = 0; i < lay.penPos.length; i++) { const p = s.pen[i]; if (p) v += petSpeed(p); }
-  if (g.carry && g.carry.kind === 'egg') v *= 1 - weightPenalty(SPECIES[g.carry.sp].tier, s.armsLv);   // rarer egg = slower
+  if (g.carry && g.carry.kind === 'egg') v *= 1 - weightPenalty(g.carry.sp, s.armsLv);   // rarer egg = slower
   v = Math.max(40, v);
   if (g.player.inPit) v *= PIT_SLOW;                              // stuck in a dirt pit
   return g.player.sprint ? Math.max(30, v * SPRINT_SLOW) : v;
@@ -150,7 +151,7 @@ const shakeIt = (g: GameData, a: number) => { g.shake = Math.min(1, Math.max(g.s
 function popup(g: GameData, x: number, y: number, text: string, color = '#fff') { g.popups.push({ x, y, text, color, life: 1.4 }); }
 
 function resetEggs(g: GameData) {
-  g.nests.forEach(n => { const sp = pickSpecies(n.tier); n.egg = sp; n.eggV = pickVariant(sp); n.guard = makeGuard(n.x, n.y, sp); });
+  g.nests.forEach(n => { const sp = pickSpecies(n.tier, n.realm); n.egg = sp; n.eggV = pickVariant(sp); n.guard = makeGuard(n.x, n.y, sp); });
 }
 
 function knockOut(g: GameData, lay: PlotLayout) {
@@ -162,23 +163,25 @@ function knockOut(g: GameData, lay: PlotLayout) {
 }
 
 /* ============================== simulation ============================== */
+const inSafe = (lay: PlotLayout, x: number, y: number, pad = 0) => inRect(x, y, lay.rect, pad) || inRect(x, y, lay.lava, pad);   // base + the lava treadmill pad
 function moveGuard(gd: Guard, tx: number, ty: number, sp: number, dt: number, lay: PlotLayout) {
   const dx = tx - gd.x, dy = ty - gd.y, d = Math.hypot(dx, dy);
   gd.moving = d > 2;
   if (d < 1) return;
   const step = Math.min(sp * dt, d), nx = gd.x + (dx / d) * step, ny = gd.y + (dy / d) * step;
-  const blocked = (x: number, y: number) => inRect(x, y, lay.rect, 40);       // guards can never enter the safe zone
+  const blocked = (x: number, y: number) => inSafe(lay, x, y, 40);       // guards can never enter the safe zone
   if (!blocked(nx, ny)) { gd.x = nx; gd.y = ny; }
   else if (!blocked(nx, gd.y)) gd.x = nx;
   else if (!blocked(gd.x, ny)) gd.y = ny;
   if (Math.abs(dx) > 0.5) gd.face = dx > 0 ? 1 : -1;
 }
 
+const infoOfNest = (n: Nest) => (n.realm === 'hell' ? HELL_TIER_INFO[n.tier]! : TIER_INFO[n.tier]);
 function updateGuard(g: GameData, n: Nest, dt: number, lay: PlotLayout) {
   const gd = n.guard, p = g.player;
-  const inBase = inRect(p.x, p.y, lay.rect, 0);
+  const inBase = inSafe(lay, p.x, p.y, 0);
   const dP = Math.hypot(p.x - gd.x, p.y - gd.y);
-  const speed = TIER_INFO[n.tier].guardSpeed;
+  const speed = infoOfNest(n).guardSpeed;
   const canSee = !inBase && p.stun <= 0;
   gd.timer -= dt;
   switch (gd.state) {
@@ -257,6 +260,11 @@ function buildCands(g: GameData, lay: PlotLayout, openShop: () => void): Cand[] 
     if (!c && s.fuseOut) { const o = s.fuseOut; out.push({ ...m, label: `Collect ${petLabel(o)}`, run: () => { g.carry = { kind: 'pet', pet: o }; s.fuseOut = null; sfx.grab(); } }); }
     else if (!c && s.fuseIn.length > 0) out.push({ ...m, label: `Take back ${petLabel(s.fuseIn[s.fuseIn.length - 1])}`, run: () => { g.carry = { kind: 'pet', pet: s.fuseIn.pop()! }; sfx.grab(); } });
   }
+  // lava treadmill: there is ALWAYS an upgrade / purchase option here
+  {
+    const cost = shopCost(s, 'lava'), m = mid(lay.lava);
+    if (cost !== null) out.push({ ...m, label: s.lavaLv === 0 ? `Buy Lava Treadmill ${fmtMoney(cost)}` : `Upgrade Lava Treadmill ${fmtMoney(cost)}`, run: openShop });
+  }
   // shop
   out.push({ ...mid(lay.shop), label: 'Open shop', run: openShop });
   void p;
@@ -289,7 +297,13 @@ function update(g: GameData, dt: number, inp: Input, lay: PlotLayout, openShop: 
 
   // treadmill: stand on it and your base speed grows for good
   p.onTread = p.stun <= 0 && inRect(p.x, p.y, lay.treadmill);
+  p.onLava = p.stun <= 0 && s.lavaLv > 0 && inRect(p.x, p.y, lay.lava);
   if (p.onTread) s.speed += treadRate(s) * dt;
+  if (p.onLava) s.speed += lavaRate(s) * dt;
+  // embers drift up in Hell
+  if (p.x > HELL_X - 250 && g.parts.length < 300 && Math.random() < dt * 22) {
+    g.parts.push({ x: p.x + (Math.random() - 0.5) * 1300, y: p.y + 380 + Math.random() * 120, vx: (Math.random() - 0.5) * 30, vy: -90 - Math.random() * 90, life: 2.2, max: 2.2, size: 2 + Math.random() * 3, color: Math.random() < 0.5 ? '#ff7a1a' : '#ffd24a', grav: 0, kind: 'dot' });
+  }
 
   // hatching (night boost)
   for (let i = 0; i < lay.hatchPos.length; i++) {
@@ -360,7 +374,22 @@ function persist(g: GameData) { g.save.carry = g.carry && g.carry.kind === 'pet'
 /* ============================== drawing ============================== */
 const frameOf = (now: number, fps: number, off = 0) => Math.floor((now / 1000) * fps + off) % SHEET.frames;
 
+/** Hell monsters: horizontal strips, size = body height in px. Sprites are pixel art, so no smoothing. */
+function drawMonster(ctx: CanvasRenderingContext2D, sp: string, anim: string, frame: number, x: number, feetY: number, h: number, faceRight: boolean, alpha = 1) {
+  const m = MONSTER[sp]; if (!m) return;
+  let a = anim === 'run' ? 'walk' : anim; if (!m.frames[a]) a = 'idle';
+  const img = monsterImgs[`${sp}_${a}`];
+  if (!img || !img.complete || img.naturalWidth === 0) return;
+  const [cw, ch] = m.cell, bb = m.bbox, k = h / (bb[3] - bb[1]), n = m.frames[a], f = ((frame % n) + n) % n;
+  ctx.save(); ctx.globalAlpha = alpha; ctx.imageSmoothingEnabled = false;
+  ctx.translate(x, feetY);
+  if (faceRight === m.facesLeft) ctx.scale(-1, 1);
+  ctx.drawImage(img, f * cw, 0, cw, ch, -((bb[0] + bb[2]) / 2) * k, -bb[3] * k, cw * k, ch * k);
+  ctx.restore();
+}
 function drawAnimal(ctx: CanvasRenderingContext2D, key: string, frame: number, x: number, feetY: number, size: number, faceRight: boolean, alpha = 1) {
+  const cut = key.indexOf('_'), who = key.slice(0, cut);
+  if (MONSTER[who]) { drawMonster(ctx, who, key.slice(cut + 1), frame, x, feetY, size, faceRight, alpha); return; }
   const img = sheetImgs[key];
   if (!img || !img.complete || img.naturalWidth === 0) return;
   const dw = size * 1.3;
@@ -398,6 +427,21 @@ function rrect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h
   ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
 }
 
+let hellPat: CanvasPattern | null = null;
+function hellGround(ctx: CanvasRenderingContext2D): CanvasPattern | string {
+  if (hellPat) return hellPat;
+  const c = document.createElement('canvas'); c.width = c.height = 256;
+  const k = c.getContext('2d')!;
+  k.fillStyle = '#2b1517'; k.fillRect(0, 0, 256, 256);
+  let a = 23; const r = () => { a = (a * 16807) % 2147483647; return a / 2147483647; };
+  for (let i = 0; i < 26; i++) {
+    k.fillStyle = r() > 0.5 ? 'rgba(70,24,24,0.35)' : 'rgba(10,4,6,0.3)';
+    const bx = r() * 256, by = r() * 256, rx = 16 + r() * 34, ry = 10 + r() * 22, rot = r() * 3;
+    for (const ox of [-256, 0, 256]) for (const oy of [-256, 0, 256]) { k.beginPath(); k.ellipse(bx + ox, by + oy, rx, ry, rot, 0, Math.PI * 2); k.fill(); }
+  }
+  hellPat = ctx.createPattern(c, 'repeat');
+  return hellPat ?? '#2b1517';
+}
 let groundPat: CanvasPattern | null = null;
 function ground(ctx: CanvasRenderingContext2D): CanvasPattern | string {
   if (groundPat) return groundPat;
@@ -414,6 +458,25 @@ function ground(ctx: CanvasRenderingContext2D): CanvasPattern | string {
   return groundPat ?? '#6cae48';
 }
 
+/** the gate where the farm ends and Hell begins */
+function drawHellEntrance(ctx: CanvasRenderingContext2D, now: number) {
+  const gr = ctx.createLinearGradient(HELL_X - 140, 0, HELL_X + 160, 0);
+  gr.addColorStop(0, 'rgba(43,21,23,0)'); gr.addColorStop(0.5, 'rgba(43,21,23,0.85)'); gr.addColorStop(1, 'rgba(43,21,23,0)');
+  ctx.fillStyle = gr; ctx.fillRect(HELL_X - 140, 0, 300, WORLD_H);
+  for (const y of [WORLD_H * 0.22, WORLD_H * 0.78]) {
+    for (const dx of [-90, 90]) {          // two flaming gate pillars
+      const x = HELL_X + dx;
+      ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.beginPath(); ctx.ellipse(x, y + 4, 40, 14, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#3b2a30'; ctx.fillRect(x - 20, y - 150, 40, 150); ctx.fillStyle = '#51383f'; ctx.fillRect(x - 20, y - 150, 12, 150);
+      const fl = 24 + Math.sin(now * 0.012 + x) * 6;
+      ctx.fillStyle = '#ff6a1a'; ctx.beginPath(); ctx.ellipse(x, y - 160, 20, fl, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#ffd24a'; ctx.beginPath(); ctx.ellipse(x, y - 156, 10, fl * 0.6, 0, 0, Math.PI * 2); ctx.fill();
+    }
+    label(ctx, '☠ HELL ☠', HELL_X, y - 200, 40, '#ff6a3a');
+    label(ctx, 'monsters here are fast: bring 5000+ speed', HELL_X, y - 166, 15, '#ffb08a');
+  }
+}
+
 function drawTree(ctx: CanvasRenderingContext2D, x: number, y: number, v: number) {
   const s = 0.9 + v * 0.5;
   shadow(ctx, x, y, 46 * s, 0.25);
@@ -423,8 +486,17 @@ function drawTree(ctx: CanvasRenderingContext2D, x: number, y: number, v: number
   ctx.fillStyle = 'rgba(255,255,255,0.1)'; ctx.beginPath(); ctx.arc(x - 12 * s, y - 104 * s, 20 * s, 0, Math.PI * 2); ctx.fill();
 }
 
-function drawPit(ctx: CanvasRenderingContext2D, pt: Pit) {
+function drawPit(ctx: CanvasRenderingContext2D, pt: Pit, now = 0) {
   const ry = pt.r * PIT_SQUASH;
+  if (pt.x >= HELL_X) {   // lava pool
+    const glow = ctx.createRadialGradient(pt.x, pt.y, pt.r * 0.3, pt.x, pt.y, pt.r * 1.7);
+    glow.addColorStop(0, 'rgba(255,120,20,0.35)'); glow.addColorStop(1, 'rgba(255,80,0,0)');
+    ctx.fillStyle = glow; ctx.beginPath(); ctx.ellipse(pt.x, pt.y, pt.r * 1.7, ry * 1.7, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#1c0e0e'; ctx.beginPath(); ctx.ellipse(pt.x, pt.y, pt.r * 1.12, ry * 1.15, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#d8400a'; ctx.beginPath(); ctx.ellipse(pt.x, pt.y + 2, pt.r, ry, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = `rgba(255,${180 + Math.sin(now * 0.004 + pt.x) * 40},40,0.9)`; ctx.beginPath(); ctx.ellipse(pt.x + pt.r * 0.05, pt.y + ry * 0.15, pt.r * 0.65, ry * 0.62, 0, 0, Math.PI * 2); ctx.fill();
+    return;
+  }
   ctx.fillStyle = '#6b4a2b'; ctx.beginPath(); ctx.ellipse(pt.x, pt.y, pt.r * 1.12, ry * 1.15, 0, 0, Math.PI * 2); ctx.fill();   // raised rim
   ctx.fillStyle = '#4a3220'; ctx.beginPath(); ctx.ellipse(pt.x, pt.y + 2, pt.r, ry, 0, 0, Math.PI * 2); ctx.fill();
   ctx.fillStyle = '#3a2718'; ctx.beginPath(); ctx.ellipse(pt.x + pt.r * 0.08, pt.y + ry * 0.2, pt.r * 0.72, ry * 0.7, 0, 0, Math.PI * 2); ctx.fill();
@@ -452,6 +524,23 @@ function drawPlot(ctx: CanvasRenderingContext2D, g: GameData, lay: PlotLayout, n
   ctx.fillStyle = '#5b6478'; for (let xx = t.x - 24 + off; xx < t.x + t.w; xx += 24) ctx.fillRect(xx, t.y, 10, t.h);
   ctx.restore();
   label(ctx, `TREADMILL +${treadRate(s)}/s`, t.x + t.w / 2, t.y - 6, 12, g.player.onTread ? '#ffe14a' : '#fff');
+  // lava treadmill (above the base, always has a buy / upgrade option)
+  {
+    const L = lay.lava, owned = s.lavaLv > 0, cost = shopCost(s, 'lava');
+    const gl = ctx.createRadialGradient(L.x + L.w / 2, L.y + L.h / 2, 10, L.x + L.w / 2, L.y + L.h / 2, 150); gl.addColorStop(0, 'rgba(255,100,20,0.3)'); gl.addColorStop(1, 'rgba(255,60,0,0)');
+    ctx.fillStyle = gl; ctx.fillRect(L.x - 60, L.y - 60, L.w + 120, L.h + 120);
+    dropShadow(ctx, L.x, L.y, L.w, L.h, 12);
+    ctx.fillStyle = '#3a1512'; rrect(ctx, L.x, L.y, L.w, L.h, 12); ctx.fill();
+    ctx.save(); rrect(ctx, L.x + 6, L.y + 6, L.w - 12, L.h - 12, 8); ctx.clip();
+    ctx.fillStyle = owned ? '#7a2a10' : '#3b2a2a'; ctx.fillRect(L.x, L.y, L.w, L.h);
+    const off2 = owned ? (g.player.onLava ? now * 0.5 : now * 0.08) % 24 : 0;
+    ctx.fillStyle = owned ? `rgba(255,${150 + Math.sin(now * 0.006) * 50},30,0.95)` : '#4a3838'; for (let xx = L.x - 24 + off2; xx < L.x + L.w; xx += 24) ctx.fillRect(xx, L.y, 10, L.h);
+    ctx.restore();
+    ctx.lineWidth = 4; ctx.strokeStyle = owned ? '#ff7a2a' : '#8a5a4a'; rrect(ctx, L.x, L.y, L.w, L.h, 12); ctx.stroke();
+    if (owned) label(ctx, `🔥 LAVA TREADMILL +${lavaRate(s)}/s`, L.x + L.w / 2, L.y - 6, 12, g.player.onLava ? '#ffe14a' : '#ffb070');
+    else { label(ctx, '🔒 LAVA TREADMILL', L.x + L.w / 2, L.y - 6, 12, '#ffb070'); label(ctx, fmtMoney(SHOP.lava.costs[0]), L.x + L.w / 2, L.y + L.h / 2 + 8, 22, '#ffe14a'); }
+    if (cost !== null) label(ctx, owned ? `▲ upgrade ${fmtMoney(cost)}` : 'walk up + [E] to buy', L.x + L.w / 2, L.y + L.h + 16, 11, '#fff');
+  }
   // shop
   const sh = lay.shop;
   dropShadow(ctx, sh.x, sh.y, sh.w, sh.h, 6);
@@ -491,20 +580,22 @@ function drawPlot(ctx: CanvasRenderingContext2D, g: GameData, lay: PlotLayout, n
 }
 
 function drawNest(ctx: CanvasRenderingContext2D, g: GameData, n: Nest, now: number, pSpeed: number) {
-  const info = TIER_INFO[n.tier];
-  shadow(ctx, n.x, n.y + 12, 52, 0.25);
-  ctx.fillStyle = '#8a6a2f'; ctx.beginPath(); ctx.ellipse(n.x, n.y + 10, 50, 24, 0, 0, Math.PI * 2); ctx.fill();
-  ctx.strokeStyle = '#c9a24d'; ctx.lineWidth = 3;
-  for (let i = 0; i < 14; i++) { const a = (i / 14) * Math.PI * 2; ctx.beginPath(); ctx.moveTo(n.x + Math.cos(a) * 30, n.y + 10 + Math.sin(a) * 13); ctx.lineTo(n.x + Math.cos(a + 0.5) * 52, n.y + 10 + Math.sin(a + 0.5) * 24); ctx.stroke(); }
-  ctx.fillStyle = '#d9b560'; ctx.beginPath(); ctx.ellipse(n.x, n.y + 8, 34, 15, 0, 0, Math.PI * 2); ctx.fill();
+  const hell = n.realm === 'hell', info = infoOfNest(n);
+  shadow(ctx, n.x, n.y + 12, hell ? 70 : 52, 0.25);
+  const sc = hell ? 1.4 : 1;
+  if (hell) { const gl = ctx.createRadialGradient(n.x, n.y + 10, 10, n.x, n.y + 10, 110); gl.addColorStop(0, 'rgba(255,90,20,0.4)'); gl.addColorStop(1, 'rgba(255,60,0,0)'); ctx.fillStyle = gl; ctx.beginPath(); ctx.ellipse(n.x, n.y + 10, 110, 60, 0, 0, Math.PI * 2); ctx.fill(); }
+  ctx.fillStyle = hell ? '#1d1216' : '#8a6a2f'; ctx.beginPath(); ctx.ellipse(n.x, n.y + 10, 50 * sc, 24 * sc, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = hell ? '#ff6a1a' : '#c9a24d'; ctx.lineWidth = 3;
+  for (let i = 0; i < 14; i++) { const a = (i / 14) * Math.PI * 2; ctx.beginPath(); ctx.moveTo(n.x + Math.cos(a) * 30 * sc, n.y + 10 + Math.sin(a) * 13 * sc); ctx.lineTo(n.x + Math.cos(a + 0.5) * 52 * sc, n.y + 10 + Math.sin(a + 0.5) * 24 * sc); ctx.stroke(); }
+  ctx.fillStyle = hell ? '#4a1a10' : '#d9b560'; ctx.beginPath(); ctx.ellipse(n.x, n.y + 8, 34 * sc, 15 * sc, 0, 0, Math.PI * 2); ctx.fill();
   if (n.egg) {
     ctx.strokeStyle = info.color; ctx.lineWidth = 3; ctx.globalAlpha = 0.5 + Math.sin(now * 0.005 + n.x) * 0.25;
     ctx.beginPath(); ctx.ellipse(n.x, n.y + 10, 42, 19, 0, 0, Math.PI * 2); ctx.stroke(); ctx.globalAlpha = 1;
     drawEgg(ctx, n.egg, n.eggV, n.x, n.y + 14, info.eggH, Math.sin(now * 0.004 + n.x) * 0.03, 1, n.y + 15);
     const need = Math.ceil(info.guardSpeed / (1 - info.weight * (1 - 0.15 * g.save.armsLv)));
-    label(ctx, `${info.label} · need ⚡${need}`, n.x, n.y + 44, 12, pSpeed >= need ? '#9dffb4' : '#ff8a8a');
+    label(ctx, `${info.label} · need ⚡${need}`, n.x, n.y + (hell ? 66 : 44), 12, pSpeed >= need ? '#9dffb4' : '#ff8a8a');
   } else {
-    label(ctx, `back in ${fmtTime(CYCLE_LEN - g.cycleT)}`, n.x, n.y + 44, 11, '#ddd');
+    label(ctx, `back in ${fmtTime(CYCLE_LEN - g.cycleT)}`, n.x, n.y + (hell ? 66 : 44), 11, '#ddd');
   }
 }
 
@@ -514,7 +605,7 @@ function drawGuard(ctx: CanvasRenderingContext2D, n: Nest, now: number, idx: num
   switch (gd.state) {
     case 'chase': key = wolf ? 'wolf_run' : `${sp}_run`; fps = 20; break;
     case 'alert': key = `${sp}_idle`; fps = 14; break;
-    case 'hit': key = wolf ? 'wolf_hit' : `${sp}_idle`; fps = 16; break;
+    case 'hit': key = wolf ? 'wolf_hit' : SPECIES[sp].hell ? `${sp}_attack` : `${sp}_idle`; fps = 16; break;
     case 'return': key = wolf ? 'wolf_flee' : `${sp}_run`; fps = 16; break;
     default: key = gd.moving ? (wolf ? 'wolf_sneak_walk' : `${sp}_walk`) : `${sp}_idle`; fps = gd.moving ? 14 : 9;
   }
@@ -540,8 +631,8 @@ function drawPlayer(ctx: CanvasRenderingContext2D, g: GameData, now: number) {
   if (c) {
     const cx = p.x + p.face * 36, cy = p.y - size * 0.6 - 4 - bob;
     const pk = 1 + 0.3 * Math.sin((g.carryPop / 0.3) * Math.PI);          // little pop when you pick something up
-    if (c.kind === 'egg') drawEgg(ctx, c.sp, c.v, cx, cy + 20, TIER_INFO[SPECIES[c.sp].tier].eggH * 0.85 * pk, Math.sin(now * 0.012) * 0.12, 1, p.y + 8);
-    else { shadow(ctx, cx, p.y + 8, SPECIES[c.pet.sp].size * 0.22, 0.25); drawAnimal(ctx, `${c.pet.sp}_idle`, frameOf(now, 10), cx, cy + 34, SPECIES[c.pet.sp].size * 0.6 * pk, p.face > 0); }
+    if (c.kind === 'egg') drawEgg(ctx, c.sp, c.v, cx, cy + 20, infoOf(c.sp).eggH * 0.85 * pk, Math.sin(now * 0.012) * 0.12, 1, p.y + 8);
+    else { shadow(ctx, cx, p.y + 8, SPECIES[c.pet.sp].size * 0.22, 0.25); drawAnimal(ctx, `${c.pet.sp}_idle`, frameOf(now, 10), cx, cy + 34, (SPECIES[c.pet.sp].hell ? SPECIES[c.pet.sp].penH! * 0.9 : SPECIES[c.pet.sp].size * 0.6) * pk, p.face > 0); }
   }
   if (p.stun > 0) label(ctx, '💫', p.x, p.y - size - 18, 22);
   label(ctx, 'YOU', p.x, p.y - size - (p.stun > 0 ? 40 : 14), 12, '#9fd0ff');
@@ -555,16 +646,20 @@ function render(ctx: CanvasRenderingContext2D, g: GameData, cw: number, ch: numb
   const sh = g.shake * g.shake * 14, shx = (Math.random() - 0.5) * 2 * sh, shy = (Math.random() - 0.5) * 2 * sh;
   ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillStyle = '#243a22'; ctx.fillRect(0, 0, cw * dpr, ch * dpr);
   ctx.setTransform(S * dpr, 0, 0, S * dpr, (-camX + shx) * S * dpr, (-camY + shy) * S * dpr);
-  ctx.fillStyle = ground(ctx); ctx.fillRect(0, 0, WORLD_W, WORLD_H);
+  ctx.fillStyle = ground(ctx); ctx.fillRect(0, 0, HELL_X, WORLD_H);
+  ctx.fillStyle = hellGround(ctx); ctx.fillRect(HELL_X, 0, WORLD_W - HELL_X, WORLD_H);
+  drawHellEntrance(ctx, now);
   ctx.lineWidth = 16; ctx.strokeStyle = '#6b4a2b'; ctx.strokeRect(0, 0, WORLD_W, WORLD_H);
   const vis = (x: number, y: number, m = 160) => x > camX - m && x < camX + vw + m && y > camY - m && y < camY + vh + m;
+  for (const d of g.deco.cracks) if (vis(d.x, d.y, 80)) { ctx.strokeStyle = `rgba(255,${90 + d.k * 90},20,${0.5 + Math.sin(now * 0.003 + d.x) * 0.2})`; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(d.x, d.y); ctx.lineTo(d.x + 30 + d.k * 40, d.y + 12 - d.v * 24); ctx.lineTo(d.x + 60 + d.k * 50, d.y + 4 + d.v * 20); ctx.stroke(); }
+  for (const d of g.deco.rocks) if (vis(d.x, d.y, 40)) { const rr = 10 + d.k * 16; ctx.fillStyle = 'rgba(0,0,0,0.3)'; ctx.beginPath(); ctx.ellipse(d.x + 3, d.y + 4, rr * 1.1, rr * 0.45, 0, 0, Math.PI * 2); ctx.fill(); ctx.fillStyle = d.v > 0.5 ? '#3a2a30' : '#2a1d22'; ctx.beginPath(); ctx.moveTo(d.x - rr, d.y); ctx.lineTo(d.x - rr * 0.4, d.y - rr * 0.9); ctx.lineTo(d.x + rr * 0.5, d.y - rr * 0.8); ctx.lineTo(d.x + rr, d.y); ctx.closePath(); ctx.fill(); }
 
   // ground decoration
   for (const d of g.deco.tufts) if (vis(d.x, d.y, 30)) { ctx.strokeStyle = d.k > 0.5 ? '#4f9438' : '#84c45a'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(d.x - 5, d.y); ctx.lineTo(d.x - 7, d.y - 10); ctx.moveTo(d.x, d.y); ctx.lineTo(d.x, d.y - 13); ctx.moveTo(d.x + 5, d.y); ctx.lineTo(d.x + 8, d.y - 9); ctx.stroke(); }
   const fcols = ['#ffd84a', '#ff7a9a', '#ffffff', '#b58cff'];
   for (const d of g.deco.flowers) if (vis(d.x, d.y, 20)) { ctx.fillStyle = fcols[Math.floor(d.v * 4)]; ctx.beginPath(); ctx.arc(d.x, d.y, 4, 0, Math.PI * 2); ctx.fill(); ctx.fillStyle = '#ff9a1a'; ctx.beginPath(); ctx.arc(d.x, d.y, 1.6, 0, Math.PI * 2); ctx.fill(); }
 
-  for (const pt of g.pits) if (vis(pt.x, pt.y, pt.r)) drawPit(ctx, pt);
+  for (const pt of g.pits) if (vis(pt.x, pt.y, pt.r * 2)) drawPit(ctx, pt, now);
   drawPlot(ctx, g, lay, now);
   const pSpeed = petBonusSpeed(g);
   g.nests.forEach(n => { if (vis(n.x, n.y)) drawNest(ctx, g, n, now, pSpeed); });
@@ -575,10 +670,10 @@ function render(ctx: CanvasRenderingContext2D, g: GameData, cw: number, ch: numb
   g.nests.forEach((n, i) => { if (vis(n.guard.x, n.guard.y)) items.push({ y: n.guard.y, draw: () => drawGuard(ctx, n, now, i) }); });
   lay.hatchPos.forEach((pos, i) => {
     const h = g.save.hatch[i]; if (!h) return;
-    const total = hatchTime(h.sp), done = h.t >= total, info = TIER_INFO[SPECIES[h.sp].tier];
+    const total = hatchTime(h.sp), done = h.t >= total, info = infoOf(h.sp);
     items.push({ y: pos.y + 10, draw: () => {
       const pop = 1 + 0.3 * Math.sin(((g.slotPop[i] ?? 0) / 0.35) * Math.PI);
-      if (done) { shadow(ctx, pos.x, pos.y + 14, SPECIES[h.sp].size * 0.3, 0.28); drawAnimal(ctx, `${h.sp}_idle`, frameOf(now, 10, i * 3), pos.x, pos.y + 14, (30 + SPECIES[h.sp].size * 0.55) * pop, false); label(ctx, 'READY!', pos.x, pos.y - 56, 12, '#ffe14a'); return; }
+      if (done) { shadow(ctx, pos.x, pos.y + 14, SPECIES[h.sp].size * 0.3, 0.28); drawAnimal(ctx, `${h.sp}_idle`, frameOf(now, 10, i * 3), pos.x, pos.y + 14, (SPECIES[h.sp].hell ? SPECIES[h.sp].penH! * 1.15 : 30 + SPECIES[h.sp].size * 0.55) * pop, false); label(ctx, 'READY!', pos.x, pos.y - 56, 12, '#ffe14a'); return; }
       const wob = (h.t / total) > 0.7 ? Math.sin(now * 0.03) * 0.14 : Math.sin(now * 0.006 + i) * 0.03;
       drawEgg(ctx, h.sp, h.v ?? 0, pos.x, pos.y + 12, info.eggH * 0.9 * pop, wob, 1, pos.y + 14);
       ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(pos.x - 28, pos.y + 22, 56, 8);
@@ -590,7 +685,7 @@ function render(ctx: CanvasRenderingContext2D, g: GameData, cw: number, ch: numb
     const pet = g.save.pen[i]; if (!pet) return;
     const hop = g.payT[i] < 0.25 ? Math.sin((g.payT[i] / 0.25) * Math.PI) * 10 : 0;
     items.push({ y: pos.y + (g.wander[i] ? g.wander[i].oy : 20), draw: () => {
-      const sz = 34 + SPECIES[pet.sp].size * 0.42;      // still bigger for rarer pets, but fits the pen square
+      const sz = SPECIES[pet.sp].hell ? SPECIES[pet.sp].penH! : 34 + SPECIES[pet.sp].size * 0.42;      // still bigger for rarer pets, but fits the pen square
       const w = g.wander[i], wx = pos.x + (w ? w.ox : 0), wy = pos.y + (w ? w.oy : 24);
       const key = w && w.moving ? (pet.sp === 'wolf' ? 'wolf_sneak_walk' : `${pet.sp}_walk`) : `${pet.sp}_idle`;
       shadow(ctx, wx, wy - 2, sz * 0.4, 0.22);
@@ -617,6 +712,7 @@ function render(ctx: CanvasRenderingContext2D, g: GameData, cw: number, ch: numb
 
   // ---- screen space ----
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  if (p.x > HELL_X - 150) { const k = Math.min(1, (p.x - (HELL_X - 150)) / 400); ctx.fillStyle = `rgba(90,10,0,${0.16 * k})`; ctx.fillRect(0, 0, cw, ch); }
   const night = g.cycleT >= DAY_LEN;
   const dusk = g.cycleT > DAY_LEN - 8 && !night ? (g.cycleT - (DAY_LEN - 8)) / 8 : 0;
   if (night || dusk > 0) { ctx.fillStyle = `rgba(8,16,60,${night ? 0.5 : 0.35 * dusk})`; ctx.fillRect(0, 0, cw, ch); }
@@ -633,7 +729,7 @@ function drawHud(ctx: CanvasRenderingContext2D, g: GameData, cw: number, ch: num
   ctx.font = 'bold 14px monospace'; ctx.fillStyle = '#fff'; ctx.fillText(`⚡ SPEED ${Math.round(sp)}`, 24, 104);
   if (g.player.inPit) { ctx.save(); ctx.font = 'bold 12px monospace'; ctx.fillStyle = '#d9a066'; ctx.fillText('stuck in dirt: −50% speed', 24, 142); ctx.restore(); }
   const c = g.carry;
-  if (c && c.kind === 'egg') { const w = weightPenalty(SPECIES[c.sp].tier, s.armsLv); ctx.fillStyle = '#ffb36b'; ctx.fillText(`carrying egg −${Math.round(w * 100)}% speed`, 24, 120); }
+  if (c && c.kind === 'egg') { const w = weightPenalty(c.sp, s.armsLv); ctx.fillStyle = '#ffb36b'; ctx.fillText(`carrying egg −${Math.round(w * 100)}% speed`, 24, 120); }
   else if (c && c.kind === 'pet') { ctx.fillStyle = '#ffe14a'; ctx.fillText(`carrying ${petLabel(c.pet)}`, 24, 120); }
   // clock
   const left = night ? CYCLE_LEN - g.cycleT : DAY_LEN - g.cycleT;
@@ -752,7 +848,7 @@ export default function StealEggGame({ onExit }: { onExit: () => void }) {
     if (k === 'slot' && L.hatchPos.length >= L.hatchCap) { sfx.no(); return; }
     if (k === 'pen' && L.penPos.length >= L.penCap) { sfx.no(); return; }
     s.cash -= cost; sfx.buy(); burst(g, g.player.x, g.player.y - 60, ['#ffe14a', '#7dff9a', '#ffffff'], 22, 220, { up: 160, kind: 'star', size: 5 }); ring(g, g.player.x, g.player.y, '#ffe14a', 70);
-    if (k === 'plot') s.plotLv++; else if (k === 'tread') s.treadLv++; else if (k === 'arms') s.armsLv++; else if (k === 'slot') s.extraSlots++; else s.penUpg++;
+    if (k === 'plot') s.plotLv++; else if (k === 'tread') s.treadLv++; else if (k === 'lava') s.lavaLv++; else if (k === 'arms') s.armsLv++; else if (k === 'slot') s.extraSlots++; else s.penUpg++;
     persist(g); force(n => n + 1);
   };
   const blockedReason = (k: ShopKey): string | null => {
@@ -795,7 +891,7 @@ export default function StealEggGame({ onExit }: { onExit: () => void }) {
             <div className="font-bold text-lg sm:text-2xl">Steal an egg. Outrun the guard. Hatch it at home.</div>
             <div className="text-xs sm:text-sm mt-2 opacity-85">
               {isMobile ? 'Joystick to move • ACTION button to grab / place / sell' : 'WASD / arrows move • E or 5 to grab, place, sell and open the shop • hold Shift or press 0 to sprint (slow, but you can sneak close to animals)'}
-              <br />Stand on the treadmill to get faster — heavier eggs need more speed. Pets in your pen earn cash.
+              <br />🔥 Buy the Lava treadmill ($5M) to get fast enough for Hell, the map past the east edge of the farm.<br />Stand on the treadmill to get faster — heavier eggs need more speed. Pets in your pen earn cash.
             </div>
           </div>
         </div>
@@ -841,14 +937,14 @@ export default function StealEggGame({ onExit }: { onExit: () => void }) {
                 const cost = shopCost(g.save, k), lv = shopLevel(g.save, k), max = SHOP[k].costs.length, why = blockedReason(k);
                 const can = cost !== null && g.save.cash >= cost && !why;
                 return (
-                  <div key={k} className="flex items-center gap-3 p-3 rounded-xl bg-black/30 border border-white/15">
+                  <div key={k} className={`flex items-center gap-3 p-3 rounded-xl border ${k === 'lava' ? 'bg-orange-900/40 border-orange-400/70' : 'bg-black/30 border-white/15'}`}>
                     <div className="flex-1 min-w-0">
                       <div className="font-bold">{SHOP[k].name} <span className="text-xs text-yellow-200">Lv {lv}/{max}</span></div>
-                      <div className="text-xs opacity-75">{SHOP[k].desc}</div>
+                      <div className="text-xs opacity-75">{k === 'lava' ? (lv === 0 ? `Hell-grade treadmill: +${LAVA_RATES[1]} speed/s (vs ${treadRate(g.save)}/s now). Your old treadmill gets 30% slower.` : lv < max ? `Lava treadmill now +${lavaRate(g.save)}/s → next level +${LAVA_RATES[lv + 1]}/s` : `Maxed: +${lavaRate(g.save)} speed/s`) : SHOP[k].desc}</div>
                     </div>
                     <button disabled={!can} onClick={() => buy(k)}
                       className={`px-3 py-2 rounded-lg font-bold text-sm min-w-[96px] ${can ? 'bg-green-500 text-black hover:bg-green-400' : 'bg-white/10 text-white/50'}`}>
-                      {cost === null ? 'MAX' : why ?? fmtMoney(cost)}
+                      {cost === null ? 'MAX' : why ?? (k === 'lava' && lv === 0 ? `Buy ${fmtMoney(cost)}` : fmtMoney(cost))}
                     </button>
                   </div>
                 );
@@ -856,7 +952,7 @@ export default function StealEggGame({ onExit }: { onExit: () => void }) {
             </div>
             <div className="mt-4 text-[11px] opacity-70 leading-relaxed">
               Pet income: {TIERS.map(t => `${TIER_INFO[t].label} ${SPECIES_BY_TIER[t].map(s => `${SPECIES[s].name} ${fmtMoney(SPECIES[s].rate)}/s`).join(', ')}`).join(' · ')}.
-              Fuse three identical pets to make one stronger one (unlocks with your first plot expansion).
+              Hell (east of the farm): {Object.entries(HELL_SPECIES_BY_TIER).map(([t, a]) => `${t} ${a!.map(x => `${SPECIES[x].name} ${fmtMoney(SPECIES[x].rate)}/s`).join(', ')}`).join(' · ')}. Fuse three identical pets to make one stronger one (unlocks with your first plot expansion).
             </div>
             <button onClick={resetAll} className="mt-3 text-[11px] underline opacity-50 hover:opacity-100">Reset all progress</button>
           </div>
