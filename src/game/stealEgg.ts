@@ -174,7 +174,7 @@ function rng(seed: number) { let a = seed >>> 0; return () => { a = (a + 0x6d2b7
 
 export interface NestDef { x: number; y: number; tier: Tier; realm: Realm }
 const BANDS: Record<Tier, [number, number, number]> = { common: [1350, 1800, 5], uncommon: [1750, 2450, 4], rare: [2300, 3000, 3], epic: [2900, 3450, 2] };
-const HELL_BANDS: Partial<Record<Tier, [number, number, number]>> = { common: [4000, 4900, 4], uncommon: [4900, 5900, 4], rare: [6000, 7000, 3], epic: [6600, 7250, 2] };
+const HELL_BANDS: Partial<Record<Tier, [number, number, number]>> = { common: [4000, 4900, 4], uncommon: [4900, 5900, 4], rare: [5900, 7200, 4] };   // each rare nest rolls 50% Dragon (legendary) / 50% Gollux every respawn
 export function makeNests(): NestDef[] {
   const r = rng(77); const out: NestDef[] = [];
   for (const tier of TIERS) {

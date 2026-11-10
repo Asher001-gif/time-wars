@@ -81,7 +81,8 @@ const fmtMoney = (n: number) => {
 const fmtTime = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 const petLabel = (p: Pet) => `${SPECIES[p.sp].name}${p.lv > 1 ? ` Lv${p.lv}` : ''}`;
 const pickVariant = (sp: Species) => Math.floor(Math.random() * eggVariantCount(sp));
-const pickSpecies = (tier: Tier, realm: Realm = 'farm'): Species => { const a = (realm === 'hell' ? HELL_SPECIES_BY_TIER[tier] : SPECIES_BY_TIER[tier]) ?? SPECIES_BY_TIER[tier]; return a[Math.floor(Math.random() * a.length)]; };
+const pickSpecies = (tier: Tier, realm: Realm = 'farm'): Species => { if (realm === 'hell' && tier === 'rare') return Math.random() < 0.5 ? 'dragon' : 'gollux';   // 50% legendary Dragon instead of rare
+  const a = (realm === 'hell' ? HELL_SPECIES_BY_TIER[tier] : SPECIES_BY_TIER[tier]) ?? SPECIES_BY_TIER[tier]; return a[Math.floor(Math.random() * a.length)]; };
 
 function makeGuard(nx: number, ny: number, kind: Species): Guard {
   const R = eggKeepOut(kind) + 16, x = nx + 0.8 * R, y = ny + 10 + 0.6 * R / EGG_SQUASH;   // home spot sits just outside the egg
@@ -176,7 +177,7 @@ function moveGuard(gd: Guard, tx: number, ty: number, sp: number, dt: number, la
   if (Math.abs(dx) > 0.5) gd.face = dx > 0 ? 1 : -1;
 }
 
-const infoOfNest = (n: Nest) => (n.realm === 'hell' ? HELL_TIER_INFO[n.tier]! : TIER_INFO[n.tier]);
+const infoOfNest = (n: Nest) => infoOf(n.guard.kind);   // follows the species, so a Dragon in a rare nest is a legendary guard
 function updateGuard(g: GameData, n: Nest, dt: number, lay: PlotLayout) {
   const gd = n.guard, p = g.player;
   const inBase = inSafe(lay, p.x, p.y, 0);
