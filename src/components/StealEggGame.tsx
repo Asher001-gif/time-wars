@@ -530,7 +530,7 @@ function drawPlot(ctx: CanvasRenderingContext2D, g: GameData, lay: PlotLayout, n
   ctx.fillStyle = '#2f3440'; rrect(ctx, t.x, t.y, t.w, t.h, 12); ctx.fill();
   ctx.save(); rrect(ctx, t.x + 6, t.y + 6, t.w - 12, t.h - 12, 8); ctx.clip();
   ctx.fillStyle = '#454c5c'; ctx.fillRect(t.x, t.y, t.w, t.h);
-  const off = (g.player.onTread ? now * 0.25 : now * 0.04) % 24;
+  const off = (g.player.onTread ? now * 0.25 * speedFx(s.speed) : now * 0.04) % 24;
   ctx.fillStyle = '#5b6478'; for (let xx = t.x - 24 + off; xx < t.x + t.w; xx += 24) ctx.fillRect(xx, t.y, 10, t.h);
   ctx.restore();
   label(ctx, `TREADMILL +${treadRate(s)}/s`, t.x + t.w / 2, t.y - 6, 12, g.player.onTread ? '#ffe14a' : '#fff');
@@ -543,7 +543,7 @@ function drawPlot(ctx: CanvasRenderingContext2D, g: GameData, lay: PlotLayout, n
     ctx.fillStyle = '#3a1512'; rrect(ctx, L.x, L.y, L.w, L.h, 12); ctx.fill();
     ctx.save(); rrect(ctx, L.x + 6, L.y + 6, L.w - 12, L.h - 12, 8); ctx.clip();
     ctx.fillStyle = owned ? '#7a2a10' : '#3b2a2a'; ctx.fillRect(L.x, L.y, L.w, L.h);
-    const off2 = owned ? (g.player.onLava ? now * 0.5 : now * 0.08) % 24 : 0;
+    const off2 = owned ? (g.player.onLava ? now * 0.5 * speedFx(s.speed) : now * 0.08) % 24 : 0;
     ctx.fillStyle = owned ? `rgba(255,${150 + Math.sin(now * 0.006) * 50},30,0.95)` : '#4a3838'; for (let xx = L.x - 24 + off2; xx < L.x + L.w; xx += 24) ctx.fillRect(xx, L.y, 10, L.h);
     ctx.restore();
     ctx.lineWidth = 4; ctx.strokeStyle = owned ? '#ff7a2a' : '#8a5a4a'; rrect(ctx, L.x, L.y, L.w, L.h, 12); ctx.stroke();
@@ -624,6 +624,55 @@ function drawGuard(ctx: CanvasRenderingContext2D, n: Nest, now: number, idx: num
   if (gd.state === 'chase' || gd.state === 'alert') label(ctx, '!', gd.x, gd.y - size * 1.0, 28, '#ff4040');
 }
 
+
+// ---- treadmill "speed rush" effect -------------------------------------------------------------
+// 1 at low speed, grows slowly (log) so even huge speeds keep looking faster without becoming unreadable
+const speedFx = (v: number) => 1 + Math.min(4, Math.log10(Math.max(1, v)) * 0.8);
+const speedK = (v: number) => Math.min(1, Math.log10(Math.max(10, v)) / 4.5);      // 0..1 intensity, ~1 at 30k speed
+
+// world space: speed counter + rising arrows that pile up on top of the player while on a treadmill
+function drawSpeedRise(ctx: CanvasRenderingContext2D, g: GameData, now: number) {
+  const p = g.player; if (!(p.onTread || p.onLava)) return;
+  const v = g.save.speed, rate = p.onLava ? lavaRate(g.save) : treadRate(g.save), k = speedK(v);
+  const col = p.onLava ? '#ffb347' : '#ffe14a';
+  const top = p.y - PLAYER_SIZE - 40;
+  // arrows float up from the player's head, faster + more of them the higher the speed
+  const n = 4 + Math.round(k * 5);
+  for (let i = 0; i < n; i++) {
+    const ph = ((now * 0.0006 * speedFx(v) + i / n) % 1);
+    const ax = p.x + Math.sin(i * 7.3) * 34, ay = top - ph * (70 + k * 60);
+    ctx.save(); ctx.globalAlpha = Math.sin(ph * Math.PI) * 0.9; ctx.fillStyle = col;
+    ctx.beginPath(); ctx.moveTo(ax, ay - 9); ctx.lineTo(ax + 8, ay + 3); ctx.lineTo(ax + 3, ay + 3); ctx.lineTo(ax + 3, ay + 9); ctx.lineTo(ax - 3, ay + 9); ctx.lineTo(ax - 3, ay + 3); ctx.lineTo(ax - 8, ay + 3); ctx.closePath(); ctx.fill(); ctx.restore();
+  }
+  // live counter that ticks up over the player's head
+  const pulse = 1 + 0.07 * Math.sin(now * 0.02);
+  ctx.save(); ctx.translate(p.x, top - 6); ctx.scale(pulse, pulse);
+  ctx.lineWidth = 5; ctx.strokeStyle = 'rgba(0,0,0,0.75)'; ctx.font = 'bold 26px monospace'; ctx.textAlign = 'center';
+  const txt = `⚡ ${Math.floor(v).toLocaleString()}`;
+  ctx.strokeText(txt, 0, 0); ctx.fillStyle = col; ctx.fillText(txt, 0, 0);
+  ctx.font = 'bold 13px monospace'; ctx.lineWidth = 4; ctx.strokeText(`▲ +${rate}/s`, 0, 18); ctx.fillStyle = '#9dffb4'; ctx.fillText(`▲ +${rate}/s`, 0, 18);
+  ctx.restore();
+}
+
+// screen space: speed lines rushing outward from the player (toward the camera) + edge glow
+function drawSpeedStreaks(ctx: CanvasRenderingContext2D, g: GameData, cw: number, ch: number, now: number) {
+  const p = g.player; if (!(p.onTread || p.onLava)) return;
+  const v = g.save.speed, k = speedK(v), col = p.onLava ? '255,150,60' : '255,235,120';
+  const cx = cw / 2, cy = ch / 2, diag = Math.hypot(cw, ch) / 2, n = 28 + Math.round(k * 40);
+  ctx.save(); ctx.lineCap = 'round';
+  for (let i = 0; i < n; i++) {
+    const a = (i * 2.399963) % (Math.PI * 2);                            // golden-angle spread, stable per line
+    const ph = (now * 0.0011 * speedFx(v) * (0.7 + ((i * 37) % 10) / 16) + i * 0.173) % 1;
+    const r0 = diag * (0.22 + ph * 0.8), r1 = r0 + diag * (0.06 + 0.22 * k) * (0.4 + ph);
+    ctx.strokeStyle = `rgba(${col},${(0.12 + 0.4 * k) * Math.sin(ph * Math.PI)})`; ctx.lineWidth = 1 + ph * (2 + 3 * k);
+    ctx.beginPath(); ctx.moveTo(cx + Math.cos(a) * r0, cy + Math.sin(a) * r0 * 0.8); ctx.lineTo(cx + Math.cos(a) * r1, cy + Math.sin(a) * r1 * 0.8); ctx.stroke();
+  }
+  const gr = ctx.createRadialGradient(cx, cy, diag * 0.55, cx, cy, diag * 1.05);
+  gr.addColorStop(0, `rgba(${col},0)`); gr.addColorStop(1, `rgba(${col},${0.1 + 0.22 * k})`);
+  ctx.fillStyle = gr; ctx.fillRect(0, 0, cw, ch);
+  ctx.restore();
+}
+
 function drawPlayer(ctx: CanvasRenderingContext2D, g: GameData, now: number) {
   const p = g.player, size = PLAYER_SIZE;
   const bob = Math.sin(now * 0.005) * 5 + (p.moving ? Math.sin(now * 0.016) * 2 : 0);   // the bot floats
@@ -631,7 +680,7 @@ function drawPlayer(ctx: CanvasRenderingContext2D, g: GameData, now: number) {
   ctx.save();
   if (p.stun > 0) { ctx.globalAlpha = 0.6 + Math.sin(now * 0.03) * 0.3; }
   ctx.translate(p.x, p.y - size * 0.55 - 10 - bob);
-  if (p.onTread) ctx.rotate(Math.sin(now * 0.03) * 0.06);
+  if (p.onTread || p.onLava) ctx.rotate(Math.sin(now * 0.03 * speedFx(g.save.speed)) * (0.05 + 0.05 * speedK(g.save.speed)));
   ctx.scale(p.face, 1);                                             // sprite faces right: left = mirror
   if (botImg.complete && botImg.naturalWidth > 0) ctx.drawImage(botImg, -size / 2, -size / 2, size, size);
   else { ctx.fillStyle = '#4a90d9'; ctx.beginPath(); ctx.arc(0, 0, size * 0.4, 0, Math.PI * 2); ctx.fill(); }
@@ -705,6 +754,7 @@ function render(ctx: CanvasRenderingContext2D, g: GameData, cw: number, ch: numb
   });
   items.push({ y: p.y, draw: () => drawPlayer(ctx, g, now) });
   items.sort((a, b) => a.y - b.y).forEach(i => i.draw());
+  drawSpeedRise(ctx, g, now);
 
   // floating texts
   for (const q of g.parts) {
@@ -728,6 +778,7 @@ function render(ctx: CanvasRenderingContext2D, g: GameData, cw: number, ch: numb
   if (night || dusk > 0) { ctx.fillStyle = `rgba(8,16,60,${night ? 0.5 : 0.35 * dusk})`; ctx.fillRect(0, 0, cw, ch); }
   if (g.flash > 0) { ctx.fillStyle = `rgba(255,0,0,${0.45 * g.flash})`; ctx.fillRect(0, 0, cw, ch); }
 
+  drawSpeedStreaks(ctx, g, cw, ch, now);
   drawHud(ctx, g, cw, ch, night);
 }
 
