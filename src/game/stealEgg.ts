@@ -2,7 +2,7 @@
 
 export type Tier = 'common' | 'uncommon' | 'rare' | 'epic';
 export type Species = 'chicken' | 'duck' | 'sheep' | 'pig' | 'cow' | 'fox' | 'heron' | 'horse' | 'wolf'
-  | 'fireworm' | 'skullwolf' | 'demon' | 'bloodmonster' | 'gollux';   // the last five live in Hell
+  | 'fireworm' | 'skullwolf' | 'demon' | 'bloodmonster' | 'gollux' | 'dragon';   // the last five live in Hell
 export type Realm = 'farm' | 'hell';
 
 export const FARM_W = 3600;                 // the farm map
@@ -33,6 +33,8 @@ export const HELL_TIER_INFO: Partial<Record<Tier, TierInfo>> = {
   common:   { label: 'Common',   color: '#e8e8e8', hatch: 20,  guard: 'wolf', guardSpeed: 2000, weight: 0.60, eggH: 70,  speedBonus: 60 },
   uncommon: { label: 'Uncommon', color: '#58d46a', hatch: 60,  guard: 'wolf', guardSpeed: 3200, weight: 0.70, eggH: 100, speedBonus: 150 },
   rare:     { label: 'Rare',     color: '#4aa8ff', hatch: 150, guard: 'wolf', guardSpeed: 4800, weight: 0.78, eggH: 150, speedBonus: 400 },
+  // the Dragon egg: the heaviest egg in the game. 5000 speed -> 500 while carrying it, and its guard is the fastest of all.
+  epic:     { label: 'LEGENDARY', color: '#ff7a1a', hatch: 300, guard: 'wolf', guardSpeed: 7000, weight: 0.90, eggH: 210, speedBonus: 1500 },
 };
 export const SPECIES: Record<Species, { name: string; tier: Tier; rate: number; size: number; hell?: boolean; penH?: number }> = {
   chicken: { name: 'Chicken', tier: 'common',   rate: 1,    size: 52 },
@@ -50,9 +52,10 @@ export const SPECIES: Record<Species, { name: string; tier: Tier; rate: number; 
   demon:        { name: 'Demon',        tier: 'uncommon', rate: 9000,  size: 130, hell: true, penH: 62 },
   bloodmonster: { name: 'Blood Fiend',  tier: 'uncommon', rate: 11000, size: 138, hell: true, penH: 64 },
   gollux:       { name: 'Gollux',       tier: 'rare',     rate: 50000, size: 230, hell: true, penH: 76 },
+  dragon:       { name: 'Fire Dragon',  tier: 'epic',     rate: 250000, size: 330, hell: true, penH: 84 },
 };
 export const infoOf = (sp: Species): TierInfo => (SPECIES[sp].hell ? HELL_TIER_INFO[SPECIES[sp].tier]! : TIER_INFO[SPECIES[sp].tier]);
-export const HELL_SPECIES_BY_TIER: Partial<Record<Tier, Species[]>> = { common: ['fireworm', 'skullwolf'], uncommon: ['demon', 'bloodmonster'], rare: ['gollux'] };
+export const HELL_SPECIES_BY_TIER: Partial<Record<Tier, Species[]>> = { common: ['fireworm', 'skullwolf'], uncommon: ['demon', 'bloodmonster'], rare: ['gollux'], epic: ['dragon'] };
 
 export const SPECIES_BY_TIER: Record<Tier, Species[]> = {
   common: ['chicken', 'duck'],
@@ -171,7 +174,7 @@ function rng(seed: number) { let a = seed >>> 0; return () => { a = (a + 0x6d2b7
 
 export interface NestDef { x: number; y: number; tier: Tier; realm: Realm }
 const BANDS: Record<Tier, [number, number, number]> = { common: [1350, 1800, 5], uncommon: [1750, 2450, 4], rare: [2300, 3000, 3], epic: [2900, 3450, 2] };
-const HELL_BANDS: Partial<Record<Tier, [number, number, number]>> = { common: [4000, 4900, 4], uncommon: [4900, 5900, 4], rare: [6000, 7000, 3] };
+const HELL_BANDS: Partial<Record<Tier, [number, number, number]>> = { common: [4000, 4900, 4], uncommon: [4900, 5900, 4], rare: [6000, 7000, 3], epic: [6600, 7250, 2] };
 export function makeNests(): NestDef[] {
   const r = rng(77); const out: NestDef[] = [];
   for (const tier of TIERS) {

@@ -23,7 +23,7 @@ interface Cand { x: number; y: number; label: string; run: () => void }
 
 // the guard is the same animal that hatches from the egg it protects (a hen guards a hen's egg, a wolf a wolf's egg ...)
 const bigTier = (t: Tier) => t === 'rare' || t === 'epic';
-const noticeOf = (k: Species) => (SPECIES[k].hell ? (SPECIES[k].tier === 'rare' ? 520 : SPECIES[k].tier === 'uncommon' ? 440 : 380) : bigTier(SPECIES[k].tier) ? 300 : 240);
+const noticeOf = (k: Species) => (SPECIES[k].hell ? (SPECIES[k].tier === 'epic' ? 650 : SPECIES[k].tier === 'rare' ? 520 : SPECIES[k].tier === 'uncommon' ? 440 : 380) : bigTier(SPECIES[k].tier) ? 300 : 240);
 const PATROL_R = 170;
 // "sprint" mode: you move slowly, but guards notice you from much closer, so you can creep up to the animals
 const SPRINT_SLOW = 0.55, SPRINT_NOTICE = 0.45;
@@ -383,14 +383,15 @@ const frameOf = (now: number, fps: number, off = 0) => Math.floor((now / 1000) *
 /** Hell monsters: horizontal strips, size = body height in px. Sprites are pixel art, so no smoothing. */
 function drawMonster(ctx: CanvasRenderingContext2D, sp: string, anim: string, frame: number, x: number, feetY: number, h: number, faceRight: boolean, alpha = 1) {
   const m = MONSTER[sp]; if (!m) return;
-  let a = anim === 'run' ? 'walk' : anim; if (!m.frames[a]) a = 'idle';
+  let a = anim === 'run' && !m.frames.run ? 'walk' : anim; if (!m.frames[a]) a = 'idle';
   const img = monsterImgs[`${sp}_${a}`];
   if (!img || !img.complete || img.naturalWidth === 0) return;
   const [cw, ch] = m.cell, bb = m.bbox, k = h / (bb[3] - bb[1]), n = m.frames[a], f = ((frame % n) + n) % n;
   ctx.save(); ctx.globalAlpha = alpha; ctx.imageSmoothingEnabled = false;
   ctx.translate(x, feetY);
   if (faceRight === m.facesLeft) ctx.scale(-1, 1);
-  ctx.drawImage(img, f * cw, 0, cw, ch, -((bb[0] + bb[2]) / 2) * k, -bb[3] * k, cw * k, ch * k);
+  const cols = m.cols?.[a] ?? n;
+  ctx.drawImage(img, (f % cols) * cw, Math.floor(f / cols) * ch, cw, ch, -((bb[0] + bb[2]) / 2) * k, -bb[3] * k, cw * k, ch * k);
   ctx.restore();
 }
 function drawAnimal(ctx: CanvasRenderingContext2D, key: string, frame: number, x: number, feetY: number, size: number, faceRight: boolean, alpha = 1) {
