@@ -26,6 +26,7 @@ const bigTier = (t: Tier) => t === 'rare' || t === 'epic';
 const noticeOf = (k: Species) => (SPECIES[k].hell ? (SPECIES[k].tier === 'epic' ? 650 : SPECIES[k].tier === 'rare' ? 520 : SPECIES[k].tier === 'uncommon' ? 440 : 380) : bigTier(SPECIES[k].tier) ? 300 : 240);
 const PATROL_R = 170;
 // "sprint" mode: you move slowly, but guards notice you from much closer, so you can creep up to the animals
+const SAFE_SPEED = 500;
 const SPRINT_SLOW = 0.55, SPRINT_NOTICE = 0.45;
 const patrolSpeedOf = (k: Species) => (SPECIES[k].hell ? 110 : bigTier(SPECIES[k].tier) ? 78 : 60);
 const REACH = 78;
@@ -132,7 +133,8 @@ function effSpeed(g: GameData): number {
   if (g.carry && g.carry.kind === 'egg') v *= 1 - weightPenalty(g.carry.sp, s.armsLv);   // rarer egg = slower
   v = Math.max(40, v);
   if (g.player.inPit) v *= PIT_SLOW;                              // stuck in a dirt pit
-  return g.player.sprint ? Math.max(30, v * SPRINT_SLOW) : v;
+  if (inSafe(lay, g.player.x, g.player.y)) v = Math.min(v, SAFE_SPEED);   // inside your base your speed is always 500
+  return g.player.sprint ? Math.min(v, SAFE_SPEED) : v;                    // sprint on: speed 500 again
 }
 const petBonusSpeed = (g: GameData) => { const s = g.save, lay = plotLayout(s); let v = s.speed; for (let i = 0; i < lay.penPos.length; i++) { const p = s.pen[i]; if (p) v += petSpeed(p); } return v; };
 
@@ -183,11 +185,11 @@ function updateGuard(g: GameData, n: Nest, dt: number, lay: PlotLayout) {
   const inBase = inSafe(lay, p.x, p.y, 0);
   const dP = Math.hypot(p.x - gd.x, p.y - gd.y);
   const speed = infoOfNest(n).guardSpeed;
-  const canSee = !inBase && p.stun <= 0;
+  const hasEgg = !!g.carry && g.carry.kind === 'egg' && g.carry.nest === g.nests.indexOf(n);   // guards only care about the egg THEY guard
+  const canSee = !inBase && p.stun <= 0 && hasEgg;
   gd.timer -= dt;
   switch (gd.state) {
     case 'patrol': {
-      if (canSee && dP < noticeOf(gd.kind) * (p.sprint ? SPRINT_NOTICE : 1)) { gd.state = 'alert'; gd.timer = 0.55; gd.moving = false; sfx.bark(); break; }
       if (gd.wait > 0) { gd.wait -= dt; gd.moving = false; break; }
       moveGuard(gd, gd.tx, gd.ty, patrolSpeedOf(gd.kind), dt, lay);
       if (Math.hypot(gd.tx - gd.x, gd.ty - gd.y) < 6) {
@@ -898,7 +900,7 @@ export default function StealEggGame({ onExit }: { onExit: () => void }) {
           <div className="px-5 py-4 rounded-2xl bg-black/80 border-2 border-yellow-300 font-mono text-center text-white max-w-2xl">
             <div className="font-bold text-lg sm:text-2xl">Steal an egg. Outrun the guard. Hatch it at home.</div>
             <div className="text-xs sm:text-sm mt-2 opacity-85">
-              {isMobile ? 'Joystick to move • ACTION button to grab / place / sell' : 'WASD / arrows move • E or 5 to grab, place, sell and open the shop • hold Shift or press 0 to sprint (slow, but you can sneak close to animals)'}
+              {isMobile ? 'Joystick to move • ACTION button to grab / place / sell' : 'WASD / arrows move • E or 5 to grab, place, sell and open the shop • hold Shift or press 0 to sprint (speed drops to 500)'}
               <br />🔥 Buy the Lava treadmill ($5M) to get fast enough for Hell, the map past the east edge of the farm.<br />Stand on the treadmill to get faster — heavier eggs need more speed. Pets in your pen earn cash.
             </div>
           </div>
@@ -912,7 +914,7 @@ export default function StealEggGame({ onExit }: { onExit: () => void }) {
             style={{ touchAction: 'none' }}
             onPointerDown={e => { e.preventDefault(); unlockAudio(); inpRef.current.sprintTog = true; }}
           >
-            {sprint ? 'SPRINT ON · slow, guards notice late' : isMobile ? 'SPRINT' : 'Hold Shift or press 0 to sprint'}
+            {sprint ? 'SPRINT ON · speed 500' : isMobile ? 'SPRINT' : 'Hold Shift or press 0 to sprint'}
           </button>
         </div>
       )}
