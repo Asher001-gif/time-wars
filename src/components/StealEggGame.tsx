@@ -192,7 +192,7 @@ function updateGuard(g: GameData, n: Nest, dt: number, lay: PlotLayout) {
       if (Math.hypot(gd.tx - gd.x, gd.ty - gd.y) < 6) {
         const a = Math.random() * Math.PI * 2, r = 40 + Math.random() * PATROL_R;
         gd.tx = gd.hx + Math.cos(a) * r; gd.ty = gd.hy + Math.sin(a) * r; gd.wait = 0.8 + Math.random() * 2;
-        if (n.egg) [gd.tx, gd.ty] = pushOutOfEgg(gd.tx, gd.ty, n, gd.kind);
+        [gd.tx, gd.ty] = pushOutOfEgg(gd.tx, gd.ty, n, gd.kind);
       }
       break;
     }
@@ -211,7 +211,13 @@ function updateGuard(g: GameData, n: Nest, dt: number, lay: PlotLayout) {
       break;
     }
   }
-  if (n.egg) [gd.x, gd.y] = pushOutOfEgg(gd.x, gd.y, n, gd.kind);
+  // solid bodies: a guard collides with every nest (egg or empty) and with other guards instead of overlapping them
+  for (const m of g.nests) {
+    [gd.x, gd.y] = pushOutOfEgg(gd.x, gd.y, m, gd.kind);
+    if (m === n) continue;
+    const o = m.guard, dx = gd.x - o.x, dy = gd.y - o.y, d = Math.hypot(dx, dy) || 0.01, min = (guardSizeOf(gd.kind) + guardSizeOf(o.kind)) * 0.3;
+    if (d < min) { const k = (min - d) / 2 / d; gd.x += dx * k; gd.y += dy * k; o.x -= dx * k; o.y -= dy * k; }
+  }
 }
 
 function buildCands(g: GameData, lay: PlotLayout, openShop: () => void): Cand[] {
