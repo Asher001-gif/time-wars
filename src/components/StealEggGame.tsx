@@ -365,10 +365,10 @@ function buildCands(g: GameData, lay: PlotLayout, openShop: () => void): Cand[] 
     if (c && c.kind === 'pet' && !s.fuseOut && c.pet.lv < MAX_PET_LEVEL && s.fuseIn.length < 3 && (s.fuseIn.length === 0 || (s.fuseIn[0].sp === c.pet.sp && s.fuseIn[0].lv === c.pet.lv))) {
       out.push({ ...m, label: `Fuse ${petLabel(c.pet)} (${s.fuseIn.length + 1}/3)`, run: () => {
         s.fuseIn.push(c.pet); g.carry = null; sfx.place();
-        if (s.fuseIn.length === 3) { s.fuseOut = { sp: c.pet.sp, lv: c.pet.lv + 1 }; s.fuseIn = []; sfx.hatch(); popup(g, m.x, m.y - 50, 'FUSED!', '#ffe14a'); burst(g, m.x, m.y, ['#b565ff', '#ffe14a', '#ffffff'], 36, 260, { up: 120, kind: 'star', size: 7 }); ring(g, m.x, m.y, '#ffe14a', 90); shakeIt(g, 0.4); }
+        if (s.fuseIn.length === 3) { s.fuseOut = { sp: c.pet.sp, lv: c.pet.lv + 1 }; s.fuseIn = []; sfx.hatch(); popup(g, m.x, m.y - 50, `${SPECIES[c.pet.sp].name} upgraded to Level ${c.pet.lv + 1}!`, '#ffe14a'); burst(g, m.x, m.y, ['#b565ff', '#ffe14a', '#ffffff'], 36, 260, { up: 120, kind: 'star', size: 7 }); ring(g, m.x, m.y, '#ffe14a', 90); shakeIt(g, 0.4); }
       } });
     }
-    if (!c && s.fuseOut) { const o = s.fuseOut; out.push({ ...m, label: `Collect ${petLabel(o)}`, run: () => { g.carry = { kind: 'pet', pet: o }; s.fuseOut = null; sfx.grab(); } }); }
+    if (!c && s.fuseOut) { const o = s.fuseOut; out.push({ ...m, label: `${SPECIES[o.sp].name} upgraded to Level ${o.lv}! Take it`, run: () => { g.carry = { kind: 'pet', pet: o }; s.fuseOut = null; sfx.grab(); } }); }
     else if (!c && s.fuseIn.length > 0) out.push({ ...m, label: `Take back ${petLabel(s.fuseIn[s.fuseIn.length - 1])}`, run: () => { g.carry = { kind: 'pet', pet: s.fuseIn.pop()! }; sfx.grab(); } });
   }
   // lava treadmill: there is ALWAYS an upgrade / purchase option here
@@ -812,7 +812,7 @@ function drawPlot(ctx: CanvasRenderingContext2D, g: GameData, lay: PlotLayout, n
   if (locked) { label(ctx, '🔒', f.x + f.w / 2, f.y + 44, 24); label(ctx, 'Expand plot', f.x + f.w / 2, f.y + f.h - 12, 11, '#ccc'); }
   else {
     for (let i = 0; i < 3; i++) { ctx.fillStyle = i < s.fuseIn.length ? '#ffe14a' : 'rgba(255,255,255,0.25)'; ctx.beginPath(); ctx.arc(f.x + 24 + i * 26, f.y + 34, 9, 0, Math.PI * 2); ctx.fill(); }
-    if (s.fuseOut) label(ctx, `${SPECIES[s.fuseOut.sp].name} Lv${s.fuseOut.lv}!`, f.x + f.w / 2, f.y + 76, 12, '#ffe14a');
+    if (s.fuseOut) { label(ctx, `${SPECIES[s.fuseOut.sp].name} → Lv${s.fuseOut.lv}!`, f.x + f.w / 2, f.y + 76, 12, '#ffe14a'); if (Math.hypot(g.player.x - (f.x + f.w / 2), g.player.y - (f.y + f.h / 2)) < 260) label(ctx, 'Press E / 5 to take it', f.x + f.w / 2, f.y - 14, 13, '#9dffb4'); }
     else label(ctx, s.fuseIn.length ? `${SPECIES[s.fuseIn[0].sp].name} ${s.fuseIn.length}/3` : 'FUSE 3→1', f.x + f.w / 2, f.y + 76, 12);
   }
   // hatch slots
@@ -1234,7 +1234,7 @@ export default function StealEggGame({ onExit }: { onExit: () => void }) {
 
       {!isMobile && prompt && !shopOpen && (
         <div className="fixed inset-x-0 bottom-8 z-[55] flex justify-center pointer-events-none">
-          <div className="px-4 py-2 rounded-xl bg-black/75 border border-white/50 text-white font-mono font-bold text-base"><span className="text-yellow-300">[E]</span> {prompt}</div>
+          <div className="px-4 py-2 rounded-xl bg-black/75 border border-white/50 text-white font-mono font-bold text-base"><span className="text-yellow-300">[E / 5]</span> {prompt}</div>
         </div>
       )}
 
