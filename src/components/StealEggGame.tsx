@@ -13,7 +13,7 @@ import {
 
 /* ============================== types ============================== */
 type Carry = { kind: 'egg'; sp: Species; v: number; nest: number } | { kind: 'pet'; pet: Pet };
-type GState = 'patrol' | 'alert' | 'chase' | 'return' | 'hit' | 'wind' | 'leap';
+type GState = 'patrol' | 'alert' | 'chase' | 'return' | 'hit' | 'wind' | 'leap' | 'gone';
 interface Guard { x: number; y: number; hx: number; hy: number; kind: Species; state: GState; tx: number; ty: number; wait: number; face: number; timer: number; moving: boolean; stall: number; cd: number; lt: number; lx: number; ly: number; ld: number }
 interface Nest { x: number; y: number; tier: Tier; realm: Realm; egg: Species | null; eggV: number; guard: Guard }
 interface Wander { sp: string; ox: number; oy: number; tx: number; ty: number; wait: number; face: boolean; moving: boolean }
@@ -203,7 +203,11 @@ function resetEggs(g: GameData) {
 
 function knockOut(g: GameData, lay: PlotLayout) {
   const c = g.carry;
-  if (c && c.kind === 'egg') { const n = g.nests[c.nest]; if (n && !n.egg) { n.egg = c.sp; n.eggV = c.v; } g.carry = null; }
+  if (c && c.kind === 'egg') {
+    const n = g.nests[c.nest];   // the guardian takes its egg and leaves the place until the next spawn (resetEggs)
+    if (n) { n.guard.state = 'hit'; n.guard.timer = 1.3; n.guard.moving = false; popup(g, n.x, n.y - 100, `${SPECIES[n.guard.kind].name} took its egg!`, '#ff8a5a'); }
+    g.carry = null;
+  }
   g.player.x = lay.spawn.x; g.player.y = lay.spawn.y; g.player.stun = 2.4; g.player.sprintLock = false; g.flash = 1;
   sfx.hit();
   burst(g, g.player.x, g.player.y - 40, ['#ff4a4a', '#ffb0b0', '#ffffff'], 24, 260, { up: 100 }); shakeIt(g, 0.9);
@@ -270,7 +274,19 @@ function updateGuard(g: GameData, n: Nest, dt: number, lay: PlotLayout) {
       if (gd.lt <= 0) { gd.state = 'chase'; gd.cd = L.cd; gd.stall = L.rest; }
       break;
     }
-    case 'hit': { gd.moving = false; if (gd.timer <= 0) gd.state = 'return'; break; }
+    case 'hit': {
+      gd.moving = false;
+      if (gd.timer <= 0) {
+        if (!n.egg) { const a = Math.random() * Math.PI * 2; gd.lx = Math.cos(a); gd.ly = Math.sin(a); gd.face = gd.lx > 0 ? 1 : -1; gd.state = 'gone'; gd.timer = 4; }   // leaves with its egg
+        else gd.state = 'return';
+      }
+      break;
+    }
+    case 'gone': {   // walks off with the egg, then is simply not there until the eggs respawn
+      if (gd.timer > 0) { gd.moving = true; gd.x += gd.lx * speed * 0.5 * dt; gd.y += gd.ly * speed * 0.5 * dt; }
+      else { gd.moving = false; gd.x = gd.hx; gd.y = gd.hy; }
+      break;
+    }
     case 'return': {
       if (canSee && dP < noticeOf(gd.kind) * 0.7) { gd.state = 'chase'; break; }
       moveGuard(gd, gd.hx, gd.hy, speed * 0.75, dt, lay);
@@ -278,10 +294,11 @@ function updateGuard(g: GameData, n: Nest, dt: number, lay: PlotLayout) {
       break;
     }
   }
+  if (gd.state === 'gone') return;
   // solid bodies: a guard collides with every nest (egg or empty) and with other guards instead of overlapping them
   for (const m of g.nests) {
     [gd.x, gd.y] = pushOutOfEgg(gd.x, gd.y, m, gd.kind);
-    if (m === n) continue;
+    if (m === n || m.guard.state === 'gone') continue;
     const o = m.guard, dx = gd.x - o.x, dy = gd.y - o.y, d = Math.hypot(dx, dy) || 0.01, min = (guardSizeOf(gd.kind) + guardSizeOf(o.kind)) * 0.3;
     if (d < min) { const k = (min - d) / 2 / d; gd.x += dx * k; gd.y += dy * k; o.x -= dx * k; o.y -= dy * k; }
   }
@@ -798,11 +815,13 @@ function drawNest(ctx: CanvasRenderingContext2D, g: GameData, n: Nest, now: numb
 }
 
 function drawGuard(ctx: CanvasRenderingContext2D, n: Nest, now: number, idx: number) {
+  if (n.guard.state === 'gone' && n.guard.timer <= 0) return;
   const gd = n.guard, sp = gd.kind, wolf = sp === 'wolf', size = guardSizeOf(sp);
   let key: string, fps: number;
   switch (gd.state) {
     case 'chase': key = wolf ? 'wolf_run' : `${sp}_run`; fps = 20; break;
     case 'alert': key = `${sp}_idle`; fps = 14; break;
+    case 'gone': key = wolf ? 'wolf_run' : `${sp}_run`; fps = 16; break;
     case 'wind': key = sp === 'raptor' ? 'raptor_readypounce' : `${sp}_idle`; fps = 8; break;
     case 'leap': key = sp === 'raptor' ? 'raptor_pounce' : `${sp}_attack`; fps = 14; break;
     case 'hit': key = wolf ? 'wolf_hit' : SPECIES[sp].hell ? `${sp}_attack` : `${sp}_idle`; fps = 16; break;
@@ -812,6 +831,7 @@ function drawGuard(ctx: CanvasRenderingContext2D, n: Nest, now: number, idx: num
   const L = LUNGE[sp], lift = gd.state === 'leap' && L ? Math.sin(Math.min(1, Math.max(0, 1 - gd.lt / L.air)) * Math.PI) * 150 : 0;   // pounce arc
   shadow(ctx, gd.x, gd.y + 4, size * 0.4 * (1 - lift / 400));
   drawAnimal(ctx, key, frameOf(now, fps, idx * 5), gd.x, gd.y - lift, size, gd.face > 0);
+  if (gd.state === 'gone') drawEgg(ctx, sp, 0, gd.x, gd.y - size * 0.75, infoOf(sp).eggH * 0.6, Math.sin(now * 0.01) * 0.1);   // carrying its egg away
   if (gd.state === 'chase' || gd.state === 'alert' || gd.state === 'wind') label(ctx, gd.state === 'wind' ? '‼' : '!', gd.x, gd.y - size * 1.0, gd.state === 'wind' ? 40 : 28, '#ff4040');
 }
 
