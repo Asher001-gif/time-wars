@@ -95,8 +95,13 @@ export interface HatchSlot { sp: Species; t: number; v?: number }   // egg hatch
 export interface Save {
   cash: number; speed: number; treadLv: number; lavaLv: number; plotLv: number; extraSlots: number; penUpg: number; armsLv: number;
   hatch: (HatchSlot | null)[]; pen: (Pet | null)[]; fuseIn: Pet[]; fuseOut: Pet | null; carry: { kind: 'pet'; pet: Pet } | null;
+  due: number; missed: number;   // pet upkeep: unpaid amount, and how many daily bills in a row went unpaid
 }
 
+/* ---------- daily pet upkeep (food + fence repairs) ---------- */
+export const UPKEEP_PCT: Record<Tier, number> = { common: 0.04, uncommon: 0.05, rare: 0.06, epic: 0.08 };   // share of what the pet earns in one day
+export const UPKEEP_LEAVE_CHANCE = 0.35;   // per pet, on each reset after the final notice
+export const petUpkeep = (p: Pet) => Math.max(1, Math.round(SPECIES[p.sp].rate * Math.pow(3, p.lv - 1) * CYCLE_LEN * UPKEEP_PCT[SPECIES[p.sp].tier]));
 export const petRate = (p: Pet) => SPECIES[p.sp].rate * Math.pow(3, p.lv - 1);
 export const petSpeed = (p: Pet) => infoOf(p.sp).speedBonus * Math.pow(2, p.lv - 1);
 export const petSellPrice = (p: Pet) => Math.round(SPECIES[p.sp].rate * 45 * Math.pow(3, p.lv - 1));
@@ -159,7 +164,7 @@ export function plotLayout(s: Save): PlotLayout {
 /* ---------- saving ---------- */
 const KEY = 'stealegg.save.v1';
 export function newSave(): Save {
-  return { cash: 0, speed: BASE_SPEED, treadLv: 0, lavaLv: 0, plotLv: 0, extraSlots: 0, penUpg: 0, armsLv: 0, hatch: [], pen: [], fuseIn: [], fuseOut: null, carry: null };
+  return { cash: 0, speed: BASE_SPEED, treadLv: 0, lavaLv: 0, plotLv: 0, extraSlots: 0, penUpg: 0, armsLv: 0, hatch: [], pen: [], fuseIn: [], fuseOut: null, carry: null, due: 0, missed: 0 };
 }
 export function loadSave(): Save {
   const s = newSave();
@@ -178,6 +183,7 @@ export function loadSave(): Save {
     if (Array.isArray(d.pen)) s.pen = d.pen.map(pet);
     if (Array.isArray(d.fuseIn)) s.fuseIn = d.fuseIn.map(pet).filter((p: Pet | null): p is Pet => !!p).slice(0, 3);
     s.fuseOut = pet(d.fuseOut);
+    s.due = num(d.due, 0); s.missed = num(d.missed, 0, 0, 3);
     const c = d.carry && d.carry.kind === 'pet' ? pet(d.carry.pet) : null;
     s.carry = c ? { kind: 'pet', pet: c } : null;
   } catch { /* private mode / corrupt save: start fresh */ }

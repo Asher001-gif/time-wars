@@ -5,7 +5,7 @@ import { useIsMobileDevice, useIsPortrait } from '@/hooks/use-device';
 import { botImg, eggImgs, eggVariantCount, MONSTER, monsterImgs, preloadStealEgg, SHEET, sheetImgs } from '@/game/stealEggAssets';
 import {
   HELL_X, JURA_X, HIDE_R, type Deco, JURA_SPECIES_BY_TIER, moveSpeed, HELL_SPECIES_BY_TIER, HELL_TIER_INFO, LAVA_RATES, infoOf, lavaRate, type Realm,
-  BASE_SPEED, CYCLE_LEN, DAY_LEN, MAX_PET_LEVEL, NIGHT_HATCH_MULT, PAY_INTERVAL, PLAYER_SIZE, SHOP, SPECIES, SPECIES_BY_TIER, TIERS, TIER_INFO,
+  BASE_SPEED, CYCLE_LEN, UPKEEP_LEAVE_CHANCE, petUpkeep, DAY_LEN, MAX_PET_LEVEL, NIGHT_HATCH_MULT, PAY_INTERVAL, PLAYER_SIZE, SHOP, SPECIES, SPECIES_BY_TIER, TIERS, TIER_INFO,
   WORLD_H, WORLD_W, clearSave, hatchTime, loadSave, makeDeco, makeNests, newSave, petRate, petSellPrice, petSpeed, plotLayout, shopCost, shopLevel,
   treadRate, weightPenalty, writeSave, makePits, inPit, PIT_SLOW, PIT_SQUASH, type Pit,
   type Pet, type PlotLayout, type Rect, type Save, type ShopKey, type Species, type Tier,
@@ -148,7 +148,7 @@ interface GameData {
   cycleT: number; t: number; wasNight: boolean;
   payT: number[]; popups: Popup[];
   saveT: number; flash: number; lastPrompt: string;
-  nightMsg: number; tip: number;
+  nightMsg: number; tip: number; upkeepMsg: { text: string; t: number; color: string } | null;
   wander: Wander[]; parts: Particle[]; shake: number; cashPulse: number; lastCash: number; slotPop: Record<number, number>; carryPop: number; prevCarry: Carry | null;
   rex: Rex; amb: number; ambient: number; thump: number;
 }
@@ -163,7 +163,7 @@ function createData(): GameData {
     player: { x: lay.spawn.x, y: lay.spawn.y, face: 1, stun: 0, moving: false, onTread: false, onLava: false, inPit: false, sprint: false, sprintLock: false, vx: 0, vy: 0, hidden: false },
     carry: save.carry ? { kind: 'pet', pet: save.carry.pet } : null,
     cycleT: 0, t: 0, wasNight: false,
-    payT: Array.from({ length: 200 }, (_, i) => (i * 0.37) % PAY_INTERVAL), popups: [], saveT: 0, flash: 0, lastPrompt: '', nightMsg: 0, tip: 0,
+    payT: Array.from({ length: 200 }, (_, i) => (i * 0.37) % PAY_INTERVAL), popups: [], saveT: 0, flash: 0, lastPrompt: '', nightMsg: 0, tip: 0, upkeepMsg: null,
     wander: [], parts: [], shake: 0, cashPulse: 0, lastCash: save.cash, slotPop: {}, carryPop: 0, prevCarry: null,
     rex: { on: false, x: 0, y: 0, face: 1, state: 'leave', t: 0, life: 0 }, amb: 6, ambient: 5, thump: 0,
   };
@@ -199,6 +199,25 @@ function popup(g: GameData, x: number, y: number, text: string, color = '#fff') 
 
 function resetEggs(g: GameData) {
   g.nests.forEach(n => { const sp = pickSpecies(n.tier, n.realm); n.egg = sp; n.eggV = pickVariant(sp); n.guard = makeGuard(n.x, n.y, sp); });
+}
+
+// a new day: pen pets cost food + fence repairs. Unpaid bills pile up; day 3 = final notice; after that animals can leave
+function chargeUpkeep(g: GameData, lay: PlotLayout) {
+  const s = g.save;
+  const pets = s.pen.slice(0, lay.penPos.length).filter((x): x is Pet => !!x);
+  if (s.due > 0) s.missed = Math.min(3, s.missed + 1);
+  const bill = pets.reduce((a, x) => a + petUpkeep(x), 0);
+  s.due += bill;
+  if (s.due <= 0) { s.missed = 0; return; }
+  const note = (text: string, color: string) => { g.upkeepMsg = { text, t: 7, color }; sfx.no(); };
+  if (s.missed === 0) note(`🧾 Day's pet upkeep: ${fmtMoney(s.due)} — pay at the Upkeep desk`, '#ffe14a');
+  else if (s.missed === 1) note(`⚠ Unpaid! Upkeep added up to ${fmtMoney(s.due)}`, '#ffb36b');
+  else if (s.missed === 2) note(`🚨 FINAL NOTICE: ${fmtMoney(s.due)} owed. Fences are breaking and food ran out — pay now or animals may leave!`, '#ff6a6a');
+  else {
+    let left = 0;
+    for (let i = 0; i < s.pen.length; i++) if (s.pen[i] && Math.random() < UPKEEP_LEAVE_CHANCE) { const pos = lay.penPos[i]; if (pos) popup(g, pos.x, pos.y - 60, `${SPECIES[s.pen[i]!.sp].name} left!`, '#ff6a6a'); s.pen[i] = null; left++; }
+    note(left ? `🐾 ${left} animal${left > 1 ? 's' : ''} escaped through the broken fence! Owed: ${fmtMoney(s.due)}` : `🚨 Still unpaid (${fmtMoney(s.due)}) — animals may leave next day!`, '#ff6a6a');
+  }
 }
 
 function knockOut(g: GameData, lay: PlotLayout) {
@@ -304,6 +323,8 @@ function updateGuard(g: GameData, n: Nest, dt: number, lay: PlotLayout) {
   }
 }
 
+const upkeepDesk = (lay: PlotLayout) => ({ x: lay.rect.x + lay.rect.w - 70, y: lay.rect.y + 250 });
+
 function buildCands(g: GameData, lay: PlotLayout, openShop: () => void): Cand[] {
   const s = g.save, p = g.player, out: Cand[] = [], c = g.carry;
   // nests
@@ -357,6 +378,15 @@ function buildCands(g: GameData, lay: PlotLayout, openShop: () => void): Cand[] 
   }
   // shop
   out.push({ ...mid(lay.shop), label: 'Open shop', run: openShop });
+  // upkeep desk
+  if (s.due > 0) {
+    const d = upkeepDesk(lay), pay = Math.min(s.cash, s.due);
+    out.push({ ...d, label: s.cash >= s.due ? `Pay pet upkeep ${fmtMoney(s.due)}` : `Part-pay upkeep ${fmtMoney(pay)} of ${fmtMoney(s.due)}`, run: () => {
+      if (pay < 1) { sfx.no(); popup(g, d.x, d.y - 50, 'Not enough cash', '#ff6a6a'); return; }
+      s.cash -= pay; s.due -= pay; sfx.coin(); popup(g, d.x, d.y - 50, `−${fmtMoney(pay)}`, '#ffb36b');
+      if (s.due < 0.5) { s.due = 0; s.missed = 0; popup(g, d.x, d.y - 80, 'All paid up! 🐾', '#7dff9a'); burst(g, d.x, d.y - 10, ['#7dff9a', '#d4ffdc'], 14, 160, { up: 120 }); }
+    } });
+  }
   void p;
   return out;
 }
@@ -417,11 +447,12 @@ function update(g: GameData, dt: number, inp: Input, lay: PlotLayout, openShop: 
   g.t += dt;
   // day / night clock
   g.cycleT += dt;
-  if (g.cycleT >= CYCLE_LEN) { g.cycleT -= CYCLE_LEN; resetEggs(g); popup(g, p.x, p.y - 100, 'Eggs have reset!', '#ffe14a'); }
+  if (g.cycleT >= CYCLE_LEN) { g.cycleT -= CYCLE_LEN; resetEggs(g); popup(g, p.x, p.y - 100, 'Eggs have reset!', '#ffe14a'); chargeUpkeep(g, lay); }
   const night = g.cycleT >= DAY_LEN;
   if (night && !g.wasNight) { sfx.night(); g.nightMsg = 4; }
   g.wasNight = night;
   if (g.nightMsg > 0) g.nightMsg -= dt;
+  if (g.upkeepMsg) { g.upkeepMsg.t -= dt; if (g.upkeepMsg.t <= 0) g.upkeepMsg = null; }
 
   // movement
   let mx = (inp.right ? 1 : 0) - (inp.left ? 1 : 0) + inp.ax, my = (inp.down ? 1 : 0) - (inp.up ? 1 : 0) + inp.ay;
@@ -768,6 +799,11 @@ function drawPlot(ctx: CanvasRenderingContext2D, g: GameData, lay: PlotLayout, n
   ctx.fillStyle = '#3f6fb5'; ctx.fillRect(se.x + 6, se.y + 30, se.w - 12, se.h - 30);
   for (let i = 0; i < 6; i++) { ctx.fillStyle = i % 2 ? '#fff' : '#3f6fb5'; ctx.fillRect(se.x + i * (se.w / 6), se.y, se.w / 6, 34); }
   label(ctx, 'SELL', se.x + se.w / 2, se.y + se.h - 22, 16, '#7dff9a'); label(ctx, '💰', se.x + se.w / 2, se.y + se.h - 42, 18);
+  // upkeep desk (always visible so you know where to pay)
+  { const d = upkeepDesk(lay), late = s.missed >= 2 && s.due > 0;
+    dropShadow(ctx, d.x - 40, d.y - 22, 80, 44, 8);
+    ctx.fillStyle = late ? '#8a2f2f' : s.due > 0 ? '#9a6a2a' : '#3f7a4a'; rrect(ctx, d.x - 40, d.y - 22, 80, 44, 8); ctx.fill();
+    label(ctx, '🧾 UPKEEP', d.x, d.y - 4, 12); label(ctx, s.due > 0 ? fmtMoney(s.due) : 'paid ✓', d.x, d.y + 14, 12, s.due > 0 ? '#ffe14a' : '#9dffb4'); }
   // fuse machine
   const f = lay.fuse, locked = s.plotLv < 1;
   dropShadow(ctx, f.x, f.y, f.w, f.h, 12);
@@ -1015,6 +1051,8 @@ function drawHud(ctx: CanvasRenderingContext2D, g: GameData, cw: number, ch: num
   const c = g.carry;
   if (c && c.kind === 'egg') { const w = weightPenalty(c.sp, s.armsLv); ctx.fillStyle = '#ffb36b'; ctx.fillText(`carrying egg −${Math.round(w * 100)}% speed`, 24, 120); }
   else if (c && c.kind === 'pet') { ctx.fillStyle = '#ffe14a'; ctx.fillText(`carrying ${petLabel(c.pet)}`, 24, 120); }
+  if (s.due > 0) { ctx.font = 'bold 12px monospace'; ctx.fillStyle = s.missed >= 2 ? '#ff6a6a' : '#ffd27a'; ctx.fillText(`🧾 Upkeep owed ${fmtMoney(s.due)}${s.missed ? ` · ${s.missed + 1} days` : ''}`, 24, g.player.inPit ? 158 : 142); }
+  if (g.upkeepMsg) { ctx.globalAlpha = Math.min(1, g.upkeepMsg.t); label(ctx, g.upkeepMsg.text, cw / 2, 124, 16, g.upkeepMsg.color); ctx.globalAlpha = 1; }
   // clock
   const left = night ? CYCLE_LEN - g.cycleT : DAY_LEN - g.cycleT;
   const bw = Math.min(300, cw - 260), bx = cw / 2 - bw / 2 + 40;
