@@ -68,7 +68,7 @@ export const SPECIES: Record<Species, { name: string; tier: Tier; rate: number; 
   trike:        { name: 'Triceratops',   tier: 'common',  rate: 380000,   size: 240, hell: true, jura: true, penH: 52 },
   spino:        { name: 'Spinosaurus',   tier: 'rare',    rate: 1800000,  size: 280, hell: true, jura: true, penH: 52 },
   raptor:       { name: 'Raptor',        tier: 'rare',    rate: 2400000,  size: 180, hell: true, jura: true, penH: 42 },
-  trex:         { name: 'T-Rex',         tier: 'epic',    rate: 14000000, size: 300, hell: true, jura: true, penH: 30 },
+  trex:         { name: 'T-Rex',         tier: 'epic',    rate: 14000000, size: 420, hell: true, jura: true, penH: 30 },
 };
 export const infoOf = (sp: Species): TierInfo => (SPECIES[sp].jura ? JURA_TIER_INFO[SPECIES[sp].tier]! : SPECIES[sp].hell ? HELL_TIER_INFO[SPECIES[sp].tier]! : TIER_INFO[SPECIES[sp].tier]);
 export const HELL_SPECIES_BY_TIER: Partial<Record<Tier, Species[]>> = { common: ['fireworm', 'skullwolf'], uncommon: ['demon', 'bloodmonster'], rare: ['gollux'], epic: ['dragon'] };

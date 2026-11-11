@@ -37,6 +37,9 @@ const SAFE_SPEED = 500;
 const SPRINT_SLOW = 0.55, SPRINT_NOTICE = 0.45;
 const patrolSpeedOf = (k: Species) => (SPECIES[k].hell ? 110 : bigTier(SPECIES[k].tier) ? 78 : 60);
 const REACH = 78;
+// big dinosaurs must actually bite: the catch radius grows with body size, and Jurassic chasers close in a bit faster than you run
+const catchR = (k: Species) => Math.max(36, guardSizeOf(k) * (SPECIES[k].jura ? 0.5 : 0.3));
+const JURA_CHASE_BOOST = 1.18;
 const guardSizeOf = (k: Species) => SPECIES[k].size * (SPECIES[k].hell ? 1 : 1.15);           // bigger animal = rarer animal (sizes are set per species in stealEgg.ts)
 const eggKeepOut = (k: Species) => 46 + guardSizeOf(k) * 0.28;          // a guard can never walk into the egg it protects
 const EGG_SQUASH = 1.5;                                                   // top-down view: the keep-out circle is squashed in y
@@ -274,8 +277,9 @@ function updateGuard(g: GameData, n: Nest, dt: number, lay: PlotLayout) {
       gd.cd -= dt;
       const L = LUNGE[gd.kind];
       if (L && gd.cd <= 0 && dP > 150 && dP < L.range) { gd.state = 'wind'; gd.timer = L.wind; gd.moving = false; sfx.dino(gd.kind); break; }
-      moveGuard(gd, p.x, p.y, speed, dt, lay);
-      if (dP < Math.max(36, speed * dt * 1.5)) { knockOut(g, lay); gd.state = 'hit'; gd.timer = 1.3; gd.moving = false; }
+      const cs = speed * (SPECIES[gd.kind].jura ? JURA_CHASE_BOOST : 1);
+      moveGuard(gd, p.x, p.y, cs, dt, lay);
+      if (dP < Math.max(catchR(gd.kind), cs * dt * 1.5)) { knockOut(g, lay); gd.state = 'hit'; gd.timer = 1.3; gd.moving = false; }
       break;
     }
     case 'wind': {           // crouch + warning cry: this is your moment to sidestep
@@ -428,8 +432,8 @@ function updateJura(g: GameData, dt: number, lay: PlotLayout) {
     if (r.t <= 0) { r.state = 'chase'; r.life = 6.5; sfx.dino('trex', 0.9); }
   } else if (r.state === 'chase') {
     r.life -= dt;
-    r.x += (dx / d) * pxs * dt; r.y += (dy / d) * pxs * dt;
-    if (d < Math.max(120, pxs * dt * 1.5) && p.stun <= 0 && !inSafe(lay, p.x, p.y)) { knockOut(g, lay); r.state = 'bite'; r.t = 1.2; shakeIt(g, 1); }
+    r.x += (dx / d) * pxs * 1.18 * dt; r.y += (dy / d) * pxs * 1.18 * dt;
+    if (d < Math.max(SPECIES.trex.size * 0.55, pxs * dt * 1.5) && p.stun <= 0 && !inSafe(lay, p.x, p.y)) { knockOut(g, lay); r.state = 'bite'; r.t = 1.2; shakeIt(g, 1); }
     else if (r.life <= 0 || (p.hidden && d > 260)) rexLeave(r);
   } else if (r.state === 'bite') {
     if (r.t <= 0) rexLeave(r);
