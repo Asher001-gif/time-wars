@@ -4,7 +4,7 @@ import RotateDevicePrompt from './RotateDevicePrompt';
 import { useIsMobileDevice, useIsPortrait } from '@/hooks/use-device';
 import { botImg, eggImgs, eggVariantCount, MONSTER, monsterImgs, preloadStealEgg, SHEET, sheetImgs } from '@/game/stealEggAssets';
 import {
-  HELL_X, HELL_SPECIES_BY_TIER, HELL_TIER_INFO, LAVA_RATES, infoOf, lavaRate, type Realm,
+  HELL_X, JURA_X, HIDE_R, type Deco, JURA_SPECIES_BY_TIER, moveSpeed, HELL_SPECIES_BY_TIER, HELL_TIER_INFO, LAVA_RATES, infoOf, lavaRate, type Realm,
   BASE_SPEED, CYCLE_LEN, DAY_LEN, MAX_PET_LEVEL, NIGHT_HATCH_MULT, PAY_INTERVAL, PLAYER_SIZE, SHOP, SPECIES, SPECIES_BY_TIER, TIERS, TIER_INFO,
   WORLD_H, WORLD_W, clearSave, hatchTime, loadSave, makeDeco, makeNests, newSave, petRate, petSellPrice, petSpeed, plotLayout, shopCost, shopLevel,
   treadRate, weightPenalty, writeSave, makePits, inPit, PIT_SLOW, PIT_SQUASH, type Pit,
@@ -13,8 +13,8 @@ import {
 
 /* ============================== types ============================== */
 type Carry = { kind: 'egg'; sp: Species; v: number; nest: number } | { kind: 'pet'; pet: Pet };
-type GState = 'patrol' | 'alert' | 'chase' | 'return' | 'hit';
-interface Guard { x: number; y: number; hx: number; hy: number; kind: Species; state: GState; tx: number; ty: number; wait: number; face: number; timer: number; moving: boolean }
+type GState = 'patrol' | 'alert' | 'chase' | 'return' | 'hit' | 'wind' | 'leap';
+interface Guard { x: number; y: number; hx: number; hy: number; kind: Species; state: GState; tx: number; ty: number; wait: number; face: number; timer: number; moving: boolean; stall: number; cd: number; lt: number; lx: number; ly: number; ld: number }
 interface Nest { x: number; y: number; tier: Tier; realm: Realm; egg: Species | null; eggV: number; guard: Guard }
 interface Wander { sp: string; ox: number; oy: number; tx: number; ty: number; wait: number; face: boolean; moving: boolean }
 interface Particle { x: number; y: number; vx: number; vy: number; life: number; max: number; size: number; color: string; grav: number; kind: 'dot' | 'coin' | 'ring' | 'star' }
@@ -23,8 +23,15 @@ interface Cand { x: number; y: number; label: string; run: () => void }
 
 // the guard is the same animal that hatches from the egg it protects (a hen guards a hen's egg, a wolf a wolf's egg ...)
 const bigTier = (t: Tier) => t === 'rare' || t === 'epic';
-const noticeOf = (k: Species) => (SPECIES[k].hell ? (SPECIES[k].tier === 'epic' ? 650 : SPECIES[k].tier === 'rare' ? 520 : SPECIES[k].tier === 'uncommon' ? 440 : 380) : bigTier(SPECIES[k].tier) ? 300 : 240);
+const noticeOf = (k: Species) => (SPECIES[k].jura ? (SPECIES[k].tier === 'epic' ? 1400 : SPECIES[k].tier === 'rare' ? 900 : 650) : SPECIES[k].hell ? (SPECIES[k].tier === 'epic' ? 650 : SPECIES[k].tier === 'rare' ? 520 : SPECIES[k].tier === 'uncommon' ? 440 : 380) : bigTier(SPECIES[k].tier) ? 300 : 240);
 const PATROL_R = 170;
+/* Jurassic rares don't just run: they crouch (wind), then pounce in a straight line. range = starts a pounce when you are this close, reach = max distance of the leap,
+   wind/air = seconds of crouch / flight, hit = catch radius, cd = pause before the next pounce, rest = stunned pause after landing. Sidestep during the crouch to dodge. */
+const LUNGE: Partial<Record<Species, { range: number; reach: number; wind: number; air: number; hit: number; cd: number; rest: number }>> = {
+  raptor: { range: 820, reach: 1800, wind: 0.4,  air: 0.4, hit: 90,  cd: 3.2, rest: 0.45 },
+  spino:  { range: 700, reach: 2200, wind: 0.65, air: 0.5, hit: 125, cd: 4.5, rest: 0.7 },
+};
+const REX_STAT = 20000;        // the roaming T-rex runs as fast as you do while carrying its egg at the 500000 'need' speed
 // "sprint" mode: you move slowly, but guards notice you from much closer, so you can creep up to the animals
 const SAFE_SPEED = 500;
 const SPRINT_SLOW = 0.55, SPRINT_NOTICE = 0.45;
@@ -59,7 +66,40 @@ function beep(f: number, d: number, type: OscillatorType = 'square', vol = 0.05,
     o.connect(g); g.connect(actx.destination); o.start(t); o.stop(t + d + 0.02);
   } catch { /* ignore */ }
 }
+function growl(f0: number, f1: number, d: number, vol = 0.08, type: OscillatorType = 'sawtooth', rough = 28, delay = 0, noiseVol = 0) {
+  if (muted || !actx) return;
+  try {
+    const t = actx.currentTime + delay;
+    const o = actx.createOscillator(), lfo = actx.createOscillator(), lg = actx.createGain(), g = actx.createGain(), lp = actx.createBiquadFilter();
+    o.type = type; o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(f1, t + d);
+    lfo.frequency.value = rough; lg.gain.value = f0 * 0.35; lfo.connect(lg); lg.connect(o.frequency);          // wobble = rough, animal-like voice
+    lp.type = 'lowpass'; lp.frequency.setValueAtTime(Math.max(300, f0 * 6), t); lp.frequency.exponentialRampToValueAtTime(Math.max(120, f1 * 3), t + d);
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vol, t + d * 0.15); g.gain.exponentialRampToValueAtTime(0.0001, t + d);
+    o.connect(lp); lp.connect(g); g.connect(actx.destination);
+    o.start(t); lfo.start(t); o.stop(t + d + 0.05); lfo.stop(t + d + 0.05);
+    if (noiseVol > 0) {   // breath / hiss
+      const n = Math.floor(actx.sampleRate * d), buf = actx.createBuffer(1, n, actx.sampleRate), ch = buf.getChannelData(0);
+      for (let i = 0; i < n; i++) ch[i] = Math.random() * 2 - 1;
+      const src = actx.createBufferSource(), ng = actx.createGain(), nf = actx.createBiquadFilter();
+      nf.type = 'lowpass'; nf.frequency.value = f0 * 5; ng.gain.setValueAtTime(noiseVol, t); ng.gain.exponentialRampToValueAtTime(0.0001, t + d);
+      src.buffer = buf; src.connect(nf); nf.connect(ng); ng.connect(actx.destination); src.start(t);
+    }
+  } catch { /* ignore */ }
+}
 const sfx = {
+  // dinosaur voices (far = volume multiplier, so distant calls are quieter)
+  dino: (sp: string, far = 1) => {
+    switch (sp) {
+      case 'brachio': growl(70, 120, 1.3, 0.09 * far, 'sine', 5); growl(120, 62, 1.0, 0.07 * far, 'sine', 4, 1.0); break;           // long low bellow
+      case 'trike':   growl(170, 95, 0.45, 0.08 * far, 'sawtooth', 18, 0, 0.03 * far); growl(150, 80, 0.5, 0.08 * far, 'sawtooth', 18, 0.55, 0.03 * far); break;   // grunt-honk
+      case 'spino':   growl(260, 70, 0.95, 0.09 * far, 'sawtooth', 32, 0, 0.06 * far); break;                                        // hissing roar
+      case 'raptor':  beep(1800, 0.12, 'sawtooth', 0.05 * far, 2700); beep(2500, 0.1, 'sawtooth', 0.05 * far, 900, 0.14); growl(900, 380, 0.3, 0.05 * far, 'sawtooth', 60, 0.28); break;   // screech
+      default:        growl(58, 36, 1.7, 0.17 * far, 'sawtooth', 14, 0, 0.09 * far); growl(120, 50, 1.2, 0.1 * far, 'square', 9, 0.12); break;   // T-rex roar
+    }
+  },
+  pounce: () => { growl(520, 110, 0.28, 0.08, 'sawtooth', 40, 0, 0.06); },
+  thump: (k = 1) => { beep(48, 0.2, 'sine', 0.13 * k, 30); },
+  warn: () => { growl(62, 34, 2.0, 0.2, 'sawtooth', 12, 0, 0.12); beep(880, 0.2, 'square', 0.05, 660, 0.3); beep(880, 0.2, 'square', 0.05, 660, 0.65); },
   grab: () => { beep(520, 0.08, 'triangle', 0.06, 780); },
   place: () => { beep(300, 0.07, 'triangle', 0.06, 220); },
   coin: () => { beep(988, 0.06, 'square', 0.03); beep(1319, 0.1, 'square', 0.03, undefined, 0.06); },
@@ -82,12 +122,13 @@ const fmtMoney = (n: number) => {
 const fmtTime = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 const petLabel = (p: Pet) => `${SPECIES[p.sp].name}${p.lv > 1 ? ` Lv${p.lv}` : ''}`;
 const pickVariant = (sp: Species) => Math.floor(Math.random() * eggVariantCount(sp));
-const pickSpecies = (tier: Tier, realm: Realm = 'farm'): Species => { if (realm === 'hell' && tier === 'rare') return Math.random() < 0.5 ? 'dragon' : 'gollux';   // 50% legendary Dragon instead of rare
+const pickSpecies = (tier: Tier, realm: Realm = 'farm'): Species => { if (realm === 'jura') { const a = JURA_SPECIES_BY_TIER[tier] ?? SPECIES_BY_TIER[tier]; return a[Math.floor(Math.random() * a.length)]; }
+  if (realm === 'hell' && tier === 'rare') return Math.random() < 0.5 ? 'dragon' : 'gollux';   // 50% legendary Dragon instead of rare
   const a = (realm === 'hell' ? HELL_SPECIES_BY_TIER[tier] : SPECIES_BY_TIER[tier]) ?? SPECIES_BY_TIER[tier]; return a[Math.floor(Math.random() * a.length)]; };
 
 function makeGuard(nx: number, ny: number, kind: Species): Guard {
   const R = eggKeepOut(kind) + 16, x = nx + 0.8 * R, y = ny + 10 + 0.6 * R / EGG_SQUASH;   // home spot sits just outside the egg
-  return { x, y, hx: x, hy: y, kind, state: 'patrol', tx: x, ty: y, wait: Math.random() * 2, face: -1, timer: 0, moving: false };
+  return { x, y, hx: x, hy: y, kind, state: 'patrol', tx: x, ty: y, wait: Math.random() * 2, face: -1, timer: 0, moving: false, stall: 0, cd: 1.5 + Math.random() * 2, lt: 0, lx: 0, ly: 0, ld: 0 };
 }
 function buildNests(): Nest[] {
   return makeNests().map(d => {
@@ -102,14 +143,16 @@ interface GameData {
   nests: Nest[];
   deco: ReturnType<typeof makeDeco>;
   pits: Pit[];
-  player: { x: number; y: number; face: number; stun: number; moving: boolean; onTread: boolean; onLava: boolean; inPit: boolean; sprint: boolean; sprintLock: boolean };
+  player: { x: number; y: number; face: number; stun: number; moving: boolean; onTread: boolean; onLava: boolean; inPit: boolean; sprint: boolean; sprintLock: boolean; vx: number; vy: number; hidden: boolean };
   carry: Carry | null;
   cycleT: number; t: number; wasNight: boolean;
   payT: number[]; popups: Popup[];
   saveT: number; flash: number; lastPrompt: string;
   nightMsg: number; tip: number;
   wander: Wander[]; parts: Particle[]; shake: number; cashPulse: number; lastCash: number; slotPop: Record<number, number>; carryPop: number; prevCarry: Carry | null;
+  rex: Rex; amb: number; ambient: number; thump: number;
 }
+interface Rex { on: boolean; x: number; y: number; face: number; state: 'warn' | 'chase' | 'bite' | 'leave'; t: number; life: number }
 
 function createData(): GameData {
   const save = loadSave();
@@ -117,11 +160,12 @@ function createData(): GameData {
   const nests = buildNests();
   return {
     save, nests, deco: makeDeco(nests.map(n => ({ x: n.x, y: n.y, tier: n.tier, realm: n.realm }))), pits: makePits(nests.map(n => ({ x: n.x, y: n.y, tier: n.tier, realm: n.realm }))),
-    player: { x: lay.spawn.x, y: lay.spawn.y, face: 1, stun: 0, moving: false, onTread: false, onLava: false, inPit: false, sprint: false, sprintLock: false },
+    player: { x: lay.spawn.x, y: lay.spawn.y, face: 1, stun: 0, moving: false, onTread: false, onLava: false, inPit: false, sprint: false, sprintLock: false, vx: 0, vy: 0, hidden: false },
     carry: save.carry ? { kind: 'pet', pet: save.carry.pet } : null,
     cycleT: 0, t: 0, wasNight: false,
     payT: Array.from({ length: 200 }, (_, i) => (i * 0.37) % PAY_INTERVAL), popups: [], saveT: 0, flash: 0, lastPrompt: '', nightMsg: 0, tip: 0,
     wander: [], parts: [], shake: 0, cashPulse: 0, lastCash: save.cash, slotPop: {}, carryPop: 0, prevCarry: null,
+    rex: { on: false, x: 0, y: 0, face: 1, state: 'leave', t: 0, life: 0 }, amb: 6, ambient: 5, thump: 0,
   };
 }
 
@@ -184,12 +228,13 @@ function updateGuard(g: GameData, n: Nest, dt: number, lay: PlotLayout) {
   const gd = n.guard, p = g.player;
   const inBase = inSafe(lay, p.x, p.y, 0);
   const dP = Math.hypot(p.x - gd.x, p.y - gd.y);
-  const speed = infoOfNest(n).guardSpeed;
+  const speed = moveSpeed(infoOfNest(n).guardSpeed, gd.x);          // stat -> px/s (compressed for huge speeds)
   const hasEgg = !!g.carry && g.carry.kind === 'egg' && g.carry.nest === g.nests.indexOf(n);   // guards only care about the egg THEY guard
-  const canSee = !inBase && p.stun <= 0 && hasEgg;
+  const canSee = !inBase && p.stun <= 0 && hasEgg && !(SPECIES[gd.kind].jura && p.hidden && dP > 260);   // hiding in ferns: Jurassic guards lose you unless they are close
   gd.timer -= dt;
   switch (gd.state) {
     case 'patrol': {
+      if (canSee && dP < noticeOf(gd.kind)) { gd.state = 'chase'; break; }
       if (gd.wait > 0) { gd.wait -= dt; gd.moving = false; break; }
       moveGuard(gd, gd.tx, gd.ty, patrolSpeedOf(gd.kind), dt, lay);
       if (Math.hypot(gd.tx - gd.x, gd.ty - gd.y) < 6) {
@@ -202,8 +247,27 @@ function updateGuard(g: GameData, n: Nest, dt: number, lay: PlotLayout) {
     case 'alert': { gd.moving = false; if (gd.timer <= 0) gd.state = 'chase'; break; }
     case 'chase': {
       if (!canSee) { gd.state = 'return'; break; }      // a guard never gives up until you are inside your home (or knocked out)
+      if (gd.stall > 0) { gd.stall -= dt; gd.moving = false; break; }
+      gd.cd -= dt;
+      const L = LUNGE[gd.kind];
+      if (L && gd.cd <= 0 && dP > 150 && dP < L.range) { gd.state = 'wind'; gd.timer = L.wind; gd.moving = false; sfx.dino(gd.kind); break; }
       moveGuard(gd, p.x, p.y, speed, dt, lay);
-      if (dP < 36) { knockOut(g, lay); gd.state = 'hit'; gd.timer = 1.3; gd.moving = false; }
+      if (dP < Math.max(36, speed * dt * 1.5)) { knockOut(g, lay); gd.state = 'hit'; gd.timer = 1.3; gd.moving = false; }
+      break;
+    }
+    case 'wind': {           // crouch + warning cry: this is your moment to sidestep
+      gd.moving = false; if (Math.abs(p.x - gd.x) > 1) gd.face = p.x > gd.x ? 1 : -1;
+      if (gd.timer <= 0) {
+        const L = LUNGE[gd.kind]!, tx = p.x + p.vx * L.air, ty = p.y + p.vy * L.air, d = Math.hypot(tx - gd.x, ty - gd.y) || 1;
+        gd.lx = (tx - gd.x) / d; gd.ly = (ty - gd.y) / d; gd.ld = Math.min(L.reach, d); gd.lt = L.air; gd.state = 'leap'; sfx.pounce();
+      }
+      break;
+    }
+    case 'leap': {           // straight-line pounce: fast, but it can't turn
+      const L = LUNGE[gd.kind]!, st = Math.min(gd.lt, dt), v = gd.ld / L.air;
+      gd.x += gd.lx * v * st; gd.y += gd.ly * v * st; gd.lt -= dt; gd.moving = true;
+      if (!inBase && p.stun <= 0 && Math.hypot(p.x - gd.x, p.y - gd.y) < L.hit) { knockOut(g, lay); gd.state = 'hit'; gd.timer = 1.3; gd.moving = false; break; }
+      if (gd.lt <= 0) { gd.state = 'chase'; gd.cd = L.cd; gd.stall = L.rest; }
       break;
     }
     case 'hit': { gd.moving = false; if (gd.timer <= 0) gd.state = 'return'; break; }
@@ -229,7 +293,7 @@ function buildCands(g: GameData, lay: PlotLayout, openShop: () => void): Cand[] 
   g.nests.forEach((n, i) => {
     if (n.egg && !c) out.push({
       x: n.x, y: n.y, label: `Steal ${SPECIES[n.egg].name} egg`,
-      run: () => { const sp = n.egg!; g.carry = { kind: 'egg', sp, v: n.eggV, nest: i }; n.egg = null; n.guard.state = 'chase'; sfx.grab(); sfx.bark(); popup(g, n.x, n.y - 80, 'Run!', '#ff8a5a'); burst(g, n.x, n.y - 20, TIER_FX[n.tier], 18, 200, { up: 120 }); ring(g, n.x, n.y + 6, TIER_FX[n.tier][0], 70); shakeIt(g, 0.3); },
+      run: () => { const sp = n.egg!; g.carry = { kind: 'egg', sp, v: n.eggV, nest: i }; n.egg = null; n.guard.state = 'chase'; sfx.grab(); if (n.realm === 'jura') sfx.dino(sp); else sfx.bark(); popup(g, n.x, n.y - 80, 'Run!', '#ff8a5a'); burst(g, n.x, n.y - 20, TIER_FX[n.tier], 18, 200, { up: 120 }); ring(g, n.x, n.y + 6, TIER_FX[n.tier][0], 70); shakeIt(g, 0.3); },
     });
   });
   // hatch slots
@@ -280,6 +344,57 @@ function buildCands(g: GameData, lay: PlotLayout, openShop: () => void): Cand[] 
   return out;
 }
 
+/* ---- Jurassic extras: dinosaur calls, spores, and the roaming T-rex ambush (only while you carry the T-rex egg) ---- */
+function rexLeave(r: Rex) { r.state = 'leave'; r.t = 2.2; }
+function spawnRex(g: GameData) {
+  const p = g.player, r = g.rex, moving = Math.hypot(p.vx, p.vy) > 50;
+  let ang = moving && Math.random() < 0.45 ? Math.atan2(p.vy, p.vx) : Math.random() * Math.PI * 2;   // 45%: straight in front of you
+  const at = (a: number) => [p.x + Math.cos(a) * 1000, p.y + Math.sin(a) * 800] as const;
+  let [x, y] = at(ang);
+  if (x < JURA_X + 100 || x > WORLD_W - 60 || y < 120 || y > WORLD_H - 120) { ang += Math.PI; [x, y] = at(ang); }
+  r.x = Math.min(WORLD_W - 60, Math.max(JURA_X + 100, x)); r.y = Math.min(WORLD_H - 120, Math.max(120, y));
+  r.on = true; r.state = 'warn'; r.t = 1.5; r.life = 0; r.face = p.x > r.x ? 1 : -1;
+  sfx.warn(); shakeIt(g, 0.4); popup(g, p.x, p.y - 130, '⚠ T-REX!', '#ff5a3a');
+}
+function updateJura(g: GameData, dt: number, lay: PlotLayout) {
+  const p = g.player, r = g.rex;
+  if (p.x >= JURA_X - 300) {
+    g.ambient -= dt;
+    if (g.ambient <= 0) {   // distant calls so the whole map feels alive
+      g.ambient = 5 + Math.random() * 8;
+      const roll = Math.random(), sp = roll < 0.2 ? 'trex' : roll < 0.45 ? 'brachio' : roll < 0.62 ? 'trike' : roll < 0.82 ? 'raptor' : 'spino';
+      sfx.dino(sp, 0.4); if (sp === 'trex') shakeIt(g, 0.12);
+    }
+    if (g.parts.length < 300 && p.x >= JURA_X - 100 && Math.random() < dt * 10) {
+      g.parts.push({ x: p.x + (Math.random() - 0.5) * 1300, y: p.y + (Math.random() - 0.5) * 800, vx: 12 + Math.random() * 20, vy: -8 - Math.random() * 14, life: 3, max: 3, size: 2 + Math.random() * 2.5, color: Math.random() < 0.5 ? '#d8f58a' : '#fff6b0', grav: 0, kind: 'dot' });
+    }
+  }
+  const carrying = !!g.carry && g.carry.kind === 'egg' && g.carry.sp === 'trex' && !inSafe(lay, p.x, p.y);
+  if (!carrying) { if (r.on && r.state !== 'bite' && r.state !== 'leave') rexLeave(r); if (!r.on) g.amb = 6; }
+  else if (!r.on && p.x >= JURA_X && !p.hidden) { g.amb -= dt; if (g.amb <= 0) spawnRex(g); }   // hiding pauses the ambush timer
+  if (!r.on) return;
+  const dx = p.x - r.x, dy = p.y - r.y, d = Math.hypot(dx, dy) || 1, pxs = moveSpeed(REX_STAT, r.x);
+  r.t -= dt;
+  if (Math.abs(dx) > 1) r.face = dx > 0 ? 1 : -1;
+  if (r.state === 'warn') {            // his head creeps in from the edge of the screen
+    r.x += (dx / d) * 150 * dt; r.y += (dy / d) * 150 * dt;
+    if (r.t <= 0) { r.state = 'chase'; r.life = 6.5; sfx.dino('trex', 0.9); }
+  } else if (r.state === 'chase') {
+    r.life -= dt;
+    r.x += (dx / d) * pxs * dt; r.y += (dy / d) * pxs * dt;
+    if (d < Math.max(120, pxs * dt * 1.5) && p.stun <= 0 && !inSafe(lay, p.x, p.y)) { knockOut(g, lay); r.state = 'bite'; r.t = 1.2; shakeIt(g, 1); }
+    else if (r.life <= 0 || (p.hidden && d > 260)) rexLeave(r);
+  } else if (r.state === 'bite') {
+    if (r.t <= 0) rexLeave(r);
+  } else {                             // leave: stomps away, then the next ambush timer starts
+    r.x -= (dx / d) * pxs * 0.7 * dt; r.y -= (dy / d) * pxs * 0.7 * dt;
+    if (r.t <= 0) { r.on = false; g.amb = 9 + Math.random() * 5; }
+  }
+  r.x = Math.min(WORLD_W - 20, Math.max(20, r.x)); r.y = Math.min(WORLD_H - 20, Math.max(20, r.y));
+  g.thump -= dt;   // footsteps shake the screen more the closer he is
+  if (g.thump <= 0 && (r.state === 'chase' || r.state === 'warn')) { g.thump = 0.38; const k = Math.min(1, Math.max(0.15, 1 - d / 1500)); sfx.thump(k); shakeIt(g, 0.06 + 0.25 * k); }
+}
+
 function update(g: GameData, dt: number, inp: Input, lay: PlotLayout, openShop: () => void) {
   const s = g.save, p = g.player;
   g.t += dt;
@@ -298,10 +413,14 @@ function update(g: GameData, dt: number, inp: Input, lay: PlotLayout, openShop: 
   if (p.stun > 0) { p.stun -= dt; mx = my = 0; }
   const wasInPit = p.inPit; p.inPit = inPit(g.pits, p.x, p.y);
   if (p.inPit && !wasInPit) burst(g, p.x, p.y, ['#6b4a2b', '#8b5a2b', '#4a3220'], 10, 110, { up: 80, size: 4 });
-  const sp = effSpeed(g);
+  const sp = moveSpeed(effSpeed(g), p.x);        // speed stat -> px/s
   p.moving = ml > 0.05;
-  p.x = Math.min(WORLD_W - 30, Math.max(30, p.x + mx * sp * dt));
-  p.y = Math.min(WORLD_H - 30, Math.max(60, p.y + my * sp * dt));
+  p.vx = mx * sp; p.vy = my * sp;
+  p.x = Math.min(WORLD_W - 30, Math.max(30, p.x + p.vx * dt));
+  p.y = Math.min(WORLD_H - 30, Math.max(60, p.y + p.vy * dt));
+  const wasHidden = p.hidden;
+  p.hidden = p.x >= JURA_X && g.deco.hides.some(h => Math.hypot(h.x - p.x, (h.y - p.y) * 1.2) < HIDE_R);
+  if (p.hidden && !wasHidden) popup(g, p.x, p.y - 110, 'Hidden!', '#bfffa0');
   if (Math.abs(mx) > 0.05) p.face = mx > 0 ? 1 : -1;
 
   // treadmill: stand on it and your base speed grows for good
@@ -310,7 +429,7 @@ function update(g: GameData, dt: number, inp: Input, lay: PlotLayout, openShop: 
   if (p.onTread) s.speed += treadRate(s) * dt;
   if (p.onLava) s.speed += lavaRate(s) * dt;
   // embers drift up in Hell
-  if (p.x > HELL_X - 250 && g.parts.length < 300 && Math.random() < dt * 22) {
+  if (p.x > HELL_X - 250 && p.x < JURA_X + 250 && g.parts.length < 300 && Math.random() < dt * 22) {
     g.parts.push({ x: p.x + (Math.random() - 0.5) * 1300, y: p.y + 380 + Math.random() * 120, vx: (Math.random() - 0.5) * 30, vy: -90 - Math.random() * 90, life: 2.2, max: 2.2, size: 2 + Math.random() * 3, color: Math.random() < 0.5 ? '#ff7a1a' : '#ffd24a', grav: 0, kind: 'dot' });
   }
 
@@ -335,6 +454,7 @@ function update(g: GameData, dt: number, inp: Input, lay: PlotLayout, openShop: 
   }
   // guards
   for (const n of g.nests) updateGuard(g, n, dt, lay);
+  updateJura(g, dt, lay);
 
   // actions
   let best: Cand | null = null, bd = REACH;
@@ -487,6 +607,74 @@ function drawHellEntrance(ctx: CanvasRenderingContext2D, now: number) {
   }
 }
 
+let juraPat: CanvasPattern | null = null;
+function juraGround(ctx: CanvasRenderingContext2D): CanvasPattern | string {
+  if (juraPat) return juraPat;
+  const c = document.createElement('canvas'); c.width = c.height = 256;
+  const k = c.getContext('2d')!;
+  k.fillStyle = '#44702f'; k.fillRect(0, 0, 256, 256);
+  let a = 41; const r = () => { a = (a * 16807) % 2147483647; return a / 2147483647; };
+  for (let i = 0; i < 28; i++) {
+    k.fillStyle = r() > 0.55 ? 'rgba(25,70,30,0.35)' : 'rgba(160,140,70,0.22)';   // deep jungle green + dusty ochre patches
+    const bx = r() * 256, by = r() * 256, rx = 16 + r() * 38, ry = 10 + r() * 24, rot = r() * 3;
+    for (const ox of [-256, 0, 256]) for (const oy of [-256, 0, 256]) { k.beginPath(); k.ellipse(bx + ox, by + oy, rx, ry, rot, 0, Math.PI * 2); k.fill(); }
+  }
+  juraPat = ctx.createPattern(c, 'repeat');
+  return juraPat ?? '#44702f';
+}
+
+/** the bone gate where Hell ends and Jurassic begins */
+function drawJuraEntrance(ctx: CanvasRenderingContext2D, now: number) {
+  const gr = ctx.createLinearGradient(JURA_X - 140, 0, JURA_X + 160, 0);
+  gr.addColorStop(0, 'rgba(60,90,30,0)'); gr.addColorStop(0.5, 'rgba(60,90,30,0.7)'); gr.addColorStop(1, 'rgba(60,90,30,0)');
+  ctx.fillStyle = gr; ctx.fillRect(JURA_X - 140, 0, 300, WORLD_H);
+  for (const y of [WORLD_H * 0.22, WORLD_H * 0.78]) {
+    for (const dx of [-100, 100]) {        // two giant tusk pillars
+      const x = JURA_X + dx, sway = Math.sin(now * 0.002 + x) * 2;
+      ctx.fillStyle = 'rgba(0,0,0,0.3)'; ctx.beginPath(); ctx.ellipse(x, y + 4, 44, 14, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#d9cfae'; ctx.beginPath(); ctx.moveTo(x - 26, y); ctx.quadraticCurveTo(x - 18, y - 120, x - dx * 0.18 + sway, y - 210); ctx.quadraticCurveTo(x + 14, y - 110, x + 26, y); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = '#efe6c8'; ctx.beginPath(); ctx.moveTo(x - 26, y); ctx.quadraticCurveTo(x - 18, y - 120, x - dx * 0.18 + sway, y - 210); ctx.quadraticCurveTo(x - 6, y - 110, x - 8, y); ctx.closePath(); ctx.fill();
+    }
+    label(ctx, '🦖 JURASSIC 🦖', JURA_X, y - 240, 40, '#d8f58a');
+    label(ctx, 'dinosaurs here are huge: bring 30000+ speed. T-rex egg needs 500000', JURA_X, y - 206, 15, '#f2e8b0');
+  }
+}
+function drawHideGround(ctx: CanvasRenderingContext2D, h: Deco) {
+  ctx.fillStyle = 'rgba(10,40,10,0.28)'; ctx.beginPath(); ctx.ellipse(h.x, h.y + 10, HIDE_R, (HIDE_R / 1.2) * 0.9, 0, 0, Math.PI * 2); ctx.fill();
+}
+/** big fern clump drawn OVER the player, so you really do disappear into it */
+function drawHideFront(ctx: CanvasRenderingContext2D, h: Deco, now: number, inside: boolean) {
+  ctx.save(); ctx.globalAlpha = inside ? 0.78 : 1;
+  for (let i = 0; i < 11; i++) {
+    const ang = (i / 11) * Math.PI * 2 + h.k * 6, rr = 28 + (i % 3) * 22 + h.v * 20, sway = Math.sin(now * 0.002 + i + h.x) * 0.08;
+    ctx.save(); ctx.translate(h.x + Math.cos(ang) * rr * 1.5, h.y + Math.sin(ang) * rr * 0.9 + 12); ctx.rotate(ang * 0.4 - 1.2 + sway);
+    ctx.fillStyle = i % 2 ? '#2b8a3a' : '#38a34a'; ctx.beginPath(); ctx.ellipse(0, -34, 14, 52, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = 'rgba(0,50,0,0.35)'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(0, -4); ctx.lineTo(0, -80); ctx.stroke();
+    ctx.restore();
+  }
+  ctx.restore();
+}
+function drawRex(ctx: CanvasRenderingContext2D, g: GameData, now: number) {
+  const r = g.rex, size = SPECIES.trex.size * 1.1;
+  const key = r.state === 'bite' ? 'trex_attack' : r.state === 'warn' ? 'trex_walk' : 'trex_run';
+  shadow(ctx, r.x, r.y + 6, size * 1.1, 0.35);
+  drawAnimal(ctx, key, frameOf(now, r.state === 'warn' ? 8 : r.state === 'bite' ? 12 : 14), r.x, r.y, size, r.face > 0);
+  if (r.state === 'warn') label(ctx, '!!', r.x, r.y - size * 1.1, 40, '#ff3a2a');
+}
+/** screen space: red edge pulse + arrow pointing at the T-rex that is about to charge */
+function drawRexWarn(ctx: CanvasRenderingContext2D, g: GameData, cw: number, ch: number, S: number, camX: number, camY: number, now: number) {
+  const r = g.rex; if (!r.on || r.state !== 'warn') return;
+  const pulse = 0.5 + 0.5 * Math.sin(now * 0.02);
+  const gr = ctx.createRadialGradient(cw / 2, ch / 2, Math.min(cw, ch) * 0.35, cw / 2, ch / 2, Math.hypot(cw, ch) / 2);
+  gr.addColorStop(0, 'rgba(255,40,20,0)'); gr.addColorStop(1, `rgba(255,40,20,${0.15 + 0.3 * pulse})`);
+  ctx.fillStyle = gr; ctx.fillRect(0, 0, cw, ch);
+  const sx = Math.min(cw - 50, Math.max(50, (r.x - camX) * S)), sy = Math.min(ch - 50, Math.max(50, (r.y - camY) * S));
+  const a = Math.atan2(sy - ch / 2, sx - cw / 2);
+  ctx.save(); ctx.translate(sx, sy); ctx.rotate(a); ctx.fillStyle = `rgba(255,70,40,${0.6 + 0.4 * pulse})`;
+  ctx.beginPath(); ctx.moveTo(28, 0); ctx.lineTo(-18, -22); ctx.lineTo(-18, 22); ctx.closePath(); ctx.fill(); ctx.restore();
+  label(ctx, 'T-REX! run the other way or hide in ferns', cw / 2, 80, 22, '#ff5a3a');
+}
+
 function drawTree(ctx: CanvasRenderingContext2D, x: number, y: number, v: number) {
   const s = 0.9 + v * 0.5;
   shadow(ctx, x, y, 46 * s, 0.25);
@@ -590,22 +778,22 @@ function drawPlot(ctx: CanvasRenderingContext2D, g: GameData, lay: PlotLayout, n
 }
 
 function drawNest(ctx: CanvasRenderingContext2D, g: GameData, n: Nest, now: number, pSpeed: number) {
-  const hell = n.realm === 'hell', info = infoOfNest(n);
+  const jura = n.realm === 'jura', hell = n.realm !== 'farm', info = infoOfNest(n);
   shadow(ctx, n.x, n.y + 12, hell ? 70 : 52, 0.25);
-  const sc = hell ? 1.4 : 1;
-  if (hell) { const gl = ctx.createRadialGradient(n.x, n.y + 10, 10, n.x, n.y + 10, 110); gl.addColorStop(0, 'rgba(255,90,20,0.4)'); gl.addColorStop(1, 'rgba(255,60,0,0)'); ctx.fillStyle = gl; ctx.beginPath(); ctx.ellipse(n.x, n.y + 10, 110, 60, 0, 0, Math.PI * 2); ctx.fill(); }
-  ctx.fillStyle = hell ? '#1d1216' : '#8a6a2f'; ctx.beginPath(); ctx.ellipse(n.x, n.y + 10, 50 * sc, 24 * sc, 0, 0, Math.PI * 2); ctx.fill();
-  ctx.strokeStyle = hell ? '#ff6a1a' : '#c9a24d'; ctx.lineWidth = 3;
+  const sc = jura ? 2 : hell ? 1.4 : 1;
+  if (hell) { const gl = ctx.createRadialGradient(n.x, n.y + 10, 10, n.x, n.y + 10, 110); gl.addColorStop(0, jura ? 'rgba(255,214,90,0.35)' : 'rgba(255,90,20,0.4)'); gl.addColorStop(1, jura ? 'rgba(255,214,90,0)' : 'rgba(255,60,0,0)'); ctx.fillStyle = gl; ctx.beginPath(); ctx.ellipse(n.x, n.y + 10, 110, 60, 0, 0, Math.PI * 2); ctx.fill(); }
+  ctx.fillStyle = hell ? (jura ? '#3b2d1a' : '#1d1216') : '#8a6a2f'; ctx.beginPath(); ctx.ellipse(n.x, n.y + 10, 50 * sc, 24 * sc, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = hell ? (jura ? '#d6b85a' : '#ff6a1a') : '#c9a24d'; ctx.lineWidth = 3;
   for (let i = 0; i < 14; i++) { const a = (i / 14) * Math.PI * 2; ctx.beginPath(); ctx.moveTo(n.x + Math.cos(a) * 30 * sc, n.y + 10 + Math.sin(a) * 13 * sc); ctx.lineTo(n.x + Math.cos(a + 0.5) * 52 * sc, n.y + 10 + Math.sin(a + 0.5) * 24 * sc); ctx.stroke(); }
-  ctx.fillStyle = hell ? '#4a1a10' : '#d9b560'; ctx.beginPath(); ctx.ellipse(n.x, n.y + 8, 34 * sc, 15 * sc, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = hell ? (jura ? '#6b5330' : '#4a1a10') : '#d9b560'; ctx.beginPath(); ctx.ellipse(n.x, n.y + 8, 34 * sc, 15 * sc, 0, 0, Math.PI * 2); ctx.fill();
   if (n.egg) {
     ctx.strokeStyle = info.color; ctx.lineWidth = 3; ctx.globalAlpha = 0.5 + Math.sin(now * 0.005 + n.x) * 0.25;
-    ctx.beginPath(); ctx.ellipse(n.x, n.y + 10, 42, 19, 0, 0, Math.PI * 2); ctx.stroke(); ctx.globalAlpha = 1;
+    ctx.beginPath(); ctx.ellipse(n.x, n.y + 10, 42 * (jura ? 2 : 1), 19 * (jura ? 2 : 1), 0, 0, Math.PI * 2); ctx.stroke(); ctx.globalAlpha = 1;
     drawEgg(ctx, n.egg, n.eggV, n.x, n.y + 14, info.eggH, Math.sin(now * 0.004 + n.x) * 0.03, 1, n.y + 15);
     const need = Math.ceil(info.guardSpeed / (1 - info.weight * (1 - 0.15 * g.save.armsLv)));
-    label(ctx, `${info.label} · need ⚡${need}`, n.x, n.y + (hell ? 66 : 44), 12, pSpeed >= need ? '#9dffb4' : '#ff8a8a');
+    label(ctx, `${info.label} · need ⚡${need}`, n.x, n.y + (jura ? 96 : hell ? 66 : 44), 12, pSpeed >= need ? '#9dffb4' : '#ff8a8a');
   } else {
-    label(ctx, `back in ${fmtTime(CYCLE_LEN - g.cycleT)}`, n.x, n.y + (hell ? 66 : 44), 11, '#ddd');
+    label(ctx, `back in ${fmtTime(CYCLE_LEN - g.cycleT)}`, n.x, n.y + (jura ? 96 : hell ? 66 : 44), 11, '#ddd');
   }
 }
 
@@ -615,13 +803,16 @@ function drawGuard(ctx: CanvasRenderingContext2D, n: Nest, now: number, idx: num
   switch (gd.state) {
     case 'chase': key = wolf ? 'wolf_run' : `${sp}_run`; fps = 20; break;
     case 'alert': key = `${sp}_idle`; fps = 14; break;
+    case 'wind': key = sp === 'raptor' ? 'raptor_readypounce' : `${sp}_idle`; fps = 8; break;
+    case 'leap': key = sp === 'raptor' ? 'raptor_pounce' : `${sp}_attack`; fps = 14; break;
     case 'hit': key = wolf ? 'wolf_hit' : SPECIES[sp].hell ? `${sp}_attack` : `${sp}_idle`; fps = 16; break;
     case 'return': key = wolf ? 'wolf_flee' : `${sp}_run`; fps = 16; break;
     default: key = gd.moving ? (wolf ? 'wolf_sneak_walk' : `${sp}_walk`) : `${sp}_idle`; fps = gd.moving ? 14 : 9;
   }
-  shadow(ctx, gd.x, gd.y + 4, size * 0.4);
-  drawAnimal(ctx, key, frameOf(now, fps, idx * 5), gd.x, gd.y, size, gd.face > 0);
-  if (gd.state === 'chase' || gd.state === 'alert') label(ctx, '!', gd.x, gd.y - size * 1.0, 28, '#ff4040');
+  const L = LUNGE[sp], lift = gd.state === 'leap' && L ? Math.sin(Math.min(1, Math.max(0, 1 - gd.lt / L.air)) * Math.PI) * 150 : 0;   // pounce arc
+  shadow(ctx, gd.x, gd.y + 4, size * 0.4 * (1 - lift / 400));
+  drawAnimal(ctx, key, frameOf(now, fps, idx * 5), gd.x, gd.y - lift, size, gd.face > 0);
+  if (gd.state === 'chase' || gd.state === 'alert' || gd.state === 'wind') label(ctx, gd.state === 'wind' ? '‼' : '!', gd.x, gd.y - size * 1.0, gd.state === 'wind' ? 40 : 28, '#ff4040');
 }
 
 
@@ -678,7 +869,7 @@ function drawPlayer(ctx: CanvasRenderingContext2D, g: GameData, now: number) {
   const bob = Math.sin(now * 0.005) * 5 + (p.moving ? Math.sin(now * 0.016) * 2 : 0);   // the bot floats
   shadow(ctx, p.x, p.y + 6, 30 - bob * 0.8, 0.3);
   ctx.save();
-  if (p.stun > 0) { ctx.globalAlpha = 0.6 + Math.sin(now * 0.03) * 0.3; }
+  if (p.stun > 0) { ctx.globalAlpha = 0.6 + Math.sin(now * 0.03) * 0.3; } else if (p.hidden) ctx.globalAlpha = 0.45;
   ctx.translate(p.x, p.y - size * 0.55 - 10 - bob);
   if (p.onTread || p.onLava) ctx.rotate(Math.sin(now * 0.03 * speedFx(g.save.speed)) * (0.05 + 0.05 * speedK(g.save.speed)));
   ctx.scale(p.face, 1);                                             // sprite faces right: left = mirror
@@ -695,6 +886,7 @@ function drawPlayer(ctx: CanvasRenderingContext2D, g: GameData, now: number) {
   }
   if (p.stun > 0) label(ctx, '💫', p.x, p.y - size - 18, 22);
   label(ctx, 'YOU', p.x, p.y - size - (p.stun > 0 ? 40 : 14), 12, '#9fd0ff');
+  if (p.hidden) label(ctx, '🌿 hidden', p.x, p.y - size - 32, 12, '#bfffa0');
 }
 
 function render(ctx: CanvasRenderingContext2D, g: GameData, cw: number, ch: number, dpr: number, now: number) {
@@ -706,12 +898,18 @@ function render(ctx: CanvasRenderingContext2D, g: GameData, cw: number, ch: numb
   ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillStyle = '#243a22'; ctx.fillRect(0, 0, cw * dpr, ch * dpr);
   ctx.setTransform(S * dpr, 0, 0, S * dpr, (-camX + shx) * S * dpr, (-camY + shy) * S * dpr);
   ctx.fillStyle = ground(ctx); ctx.fillRect(0, 0, HELL_X, WORLD_H);
-  ctx.fillStyle = hellGround(ctx); ctx.fillRect(HELL_X, 0, WORLD_W - HELL_X, WORLD_H);
-  drawHellEntrance(ctx, now);
+  ctx.fillStyle = hellGround(ctx); ctx.fillRect(HELL_X, 0, JURA_X - HELL_X, WORLD_H);
+  ctx.fillStyle = juraGround(ctx); ctx.fillRect(JURA_X, 0, WORLD_W - JURA_X, WORLD_H);
+  drawHellEntrance(ctx, now); drawJuraEntrance(ctx, now);
   ctx.lineWidth = 16; ctx.strokeStyle = '#6b4a2b'; ctx.strokeRect(0, 0, WORLD_W, WORLD_H);
   const vis = (x: number, y: number, m = 160) => x > camX - m && x < camX + vw + m && y > camY - m && y < camY + vh + m;
   for (const d of g.deco.cracks) if (vis(d.x, d.y, 80)) { ctx.strokeStyle = `rgba(255,${90 + d.k * 90},20,${0.5 + Math.sin(now * 0.003 + d.x) * 0.2})`; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(d.x, d.y); ctx.lineTo(d.x + 30 + d.k * 40, d.y + 12 - d.v * 24); ctx.lineTo(d.x + 60 + d.k * 50, d.y + 4 + d.v * 20); ctx.stroke(); }
   for (const d of g.deco.rocks) if (vis(d.x, d.y, 40)) { const rr = 10 + d.k * 16; ctx.fillStyle = 'rgba(0,0,0,0.3)'; ctx.beginPath(); ctx.ellipse(d.x + 3, d.y + 4, rr * 1.1, rr * 0.45, 0, 0, Math.PI * 2); ctx.fill(); ctx.fillStyle = d.v > 0.5 ? '#3a2a30' : '#2a1d22'; ctx.beginPath(); ctx.moveTo(d.x - rr, d.y); ctx.lineTo(d.x - rr * 0.4, d.y - rr * 0.9); ctx.lineTo(d.x + rr * 0.5, d.y - rr * 0.8); ctx.lineTo(d.x + rr, d.y); ctx.closePath(); ctx.fill(); }
+
+  // Jurassic ground decoration: ferns, boulders, hiding patches
+  for (const d of g.deco.ferns) if (vis(d.x, d.y, 40)) { ctx.strokeStyle = d.k > 0.5 ? '#2f7a30' : '#4a9a3c'; ctx.lineWidth = 3; ctx.beginPath(); for (let j = -2; j <= 2; j++) { ctx.moveTo(d.x, d.y); ctx.quadraticCurveTo(d.x + j * 9, d.y - 20, d.x + j * 16, d.y - 30 - d.v * 10); } ctx.stroke(); }
+  for (const d of g.deco.boulders) if (vis(d.x, d.y, 60)) { const rr = 18 + d.k * 36; ctx.fillStyle = 'rgba(0,0,0,0.25)'; ctx.beginPath(); ctx.ellipse(d.x + 4, d.y + 6, rr * 1.1, rr * 0.45, 0, 0, Math.PI * 2); ctx.fill(); ctx.fillStyle = d.v > 0.5 ? '#8a8272' : '#746d60'; ctx.beginPath(); ctx.ellipse(d.x, d.y - rr * 0.2, rr, rr * 0.62, 0, 0, Math.PI * 2); ctx.fill(); ctx.fillStyle = 'rgba(255,255,255,0.12)'; ctx.beginPath(); ctx.ellipse(d.x - rr * 0.3, d.y - rr * 0.4, rr * 0.4, rr * 0.2, 0, 0, Math.PI * 2); ctx.fill(); }
+  for (const h of g.deco.hides) if (vis(h.x, h.y, HIDE_R + 40)) drawHideGround(ctx, h);
 
   // ground decoration
   for (const d of g.deco.tufts) if (vis(d.x, d.y, 30)) { ctx.strokeStyle = d.k > 0.5 ? '#4f9438' : '#84c45a'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(d.x - 5, d.y); ctx.lineTo(d.x - 7, d.y - 10); ctx.moveTo(d.x, d.y); ctx.lineTo(d.x, d.y - 13); ctx.moveTo(d.x + 5, d.y); ctx.lineTo(d.x + 8, d.y - 9); ctx.stroke(); }
@@ -726,6 +924,8 @@ function render(ctx: CanvasRenderingContext2D, g: GameData, cw: number, ch: numb
   // things that stand up are drawn back-to-front
   const items: { y: number; draw: () => void }[] = [];
   for (const t of g.deco.trees) if (vis(t.x, t.y, 200)) items.push({ y: t.y, draw: () => drawTree(ctx, t.x, t.y, t.v) });
+  for (const t of g.deco.jtrees) if (vis(t.x, t.y, 200)) items.push({ y: t.y, draw: () => drawTree(ctx, t.x, t.y, t.v) });
+  if (g.rex.on) items.push({ y: g.rex.y, draw: () => drawRex(ctx, g, now) });
   g.nests.forEach((n, i) => { if (vis(n.guard.x, n.guard.y)) items.push({ y: n.guard.y, draw: () => drawGuard(ctx, n, now, i) }); });
   lay.hatchPos.forEach((pos, i) => {
     const h = g.save.hatch[i]; if (!h) return;
@@ -754,6 +954,7 @@ function render(ctx: CanvasRenderingContext2D, g: GameData, cw: number, ch: numb
   });
   items.push({ y: p.y, draw: () => drawPlayer(ctx, g, now) });
   items.sort((a, b) => a.y - b.y).forEach(i => i.draw());
+  for (const h of g.deco.hides) if (vis(h.x, h.y, HIDE_R + 80)) drawHideFront(ctx, h, now, p.hidden && Math.hypot(h.x - p.x, (h.y - p.y) * 1.2) < HIDE_R);   // ferns grow over you
   drawSpeedRise(ctx, g, now);
 
   // floating texts
@@ -772,12 +973,14 @@ function render(ctx: CanvasRenderingContext2D, g: GameData, cw: number, ch: numb
 
   // ---- screen space ----
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  if (p.x > HELL_X - 150) { const k = Math.min(1, (p.x - (HELL_X - 150)) / 400); ctx.fillStyle = `rgba(90,10,0,${0.16 * k})`; ctx.fillRect(0, 0, cw, ch); }
+  if (p.x > HELL_X - 150) { const k = Math.min(1, (p.x - (HELL_X - 150)) / 400) * Math.min(1, Math.max(0, (JURA_X + 250 - p.x) / 400)); ctx.fillStyle = `rgba(90,10,0,${0.16 * k})`; ctx.fillRect(0, 0, cw, ch); }
+  if (p.x > JURA_X - 100) { const k2 = Math.min(1, (p.x - (JURA_X - 100)) / 400); ctx.fillStyle = `rgba(60,90,20,${0.1 * k2})`; ctx.fillRect(0, 0, cw, ch); }
   const night = g.cycleT >= DAY_LEN;
   const dusk = g.cycleT > DAY_LEN - 8 && !night ? (g.cycleT - (DAY_LEN - 8)) / 8 : 0;
   if (night || dusk > 0) { ctx.fillStyle = `rgba(8,16,60,${night ? 0.5 : 0.35 * dusk})`; ctx.fillRect(0, 0, cw, ch); }
   if (g.flash > 0) { ctx.fillStyle = `rgba(255,0,0,${0.45 * g.flash})`; ctx.fillRect(0, 0, cw, ch); }
 
+  drawRexWarn(ctx, g, cw, ch, S, camX, camY, now);
   drawSpeedStreaks(ctx, g, cw, ch, now);
   drawHud(ctx, g, cw, ch, night);
 }
@@ -953,7 +1156,7 @@ export default function StealEggGame({ onExit }: { onExit: () => void }) {
             <div className="font-bold text-lg sm:text-2xl">Steal an egg. Outrun the guard. Hatch it at home.</div>
             <div className="text-xs sm:text-sm mt-2 opacity-85">
               {isMobile ? 'Joystick to move • ACTION button to grab / place / sell' : 'WASD / arrows move • E or 5 to grab, place, sell and open the shop • hold Shift or press 0 to sprint (speed drops to 500)'}
-              <br />🔥 Buy the Lava treadmill ($5M) to get fast enough for Hell, the map past the east edge of the farm.<br />Stand on the treadmill to get faster — heavier eggs need more speed. Pets in your pen earn cash.
+              <br />🔥 Buy the Lava treadmill ($5M) to get fast enough for Hell, the map past the east edge of the farm.<br />🦖 Past Hell lies JURASSIC (twice as long, need 30000+ speed): giant dinosaur guards, rares pounce, the T-rex egg needs 500000 and a T-rex can charge in from any side. Stand in big ferns to hide.<br />Stand on the treadmill to get faster — heavier eggs need more speed. Pets in your pen earn cash.
             </div>
           </div>
         </div>
@@ -1014,7 +1217,7 @@ export default function StealEggGame({ onExit }: { onExit: () => void }) {
             </div>
             <div className="mt-4 text-[11px] opacity-70 leading-relaxed">
               Pet income: {TIERS.map(t => `${TIER_INFO[t].label} ${SPECIES_BY_TIER[t].map(s => `${SPECIES[s].name} ${fmtMoney(SPECIES[s].rate)}/s`).join(', ')}`).join(' · ')}.
-              Hell (east of the farm): {Object.entries(HELL_SPECIES_BY_TIER).map(([t, a]) => `${t} ${a!.map(x => `${SPECIES[x].name} ${fmtMoney(SPECIES[x].rate)}/s`).join(', ')}`).join(' · ')}. Fuse three identical pets to make one stronger one (unlocks with your first plot expansion).
+              Hell (east of the farm): {Object.entries(HELL_SPECIES_BY_TIER).map(([t, a]) => `${t} ${a!.map(x => `${SPECIES[x].name} ${fmtMoney(SPECIES[x].rate)}/s`).join(', ')}`).join(' · ')}. Jurassic (east of Hell): {Object.entries(JURA_SPECIES_BY_TIER).map(([t, a]) => `${t} ${a!.map(x => `${SPECIES[x].name} ${fmtMoney(SPECIES[x].rate)}/s`).join(', ')}`).join(' · ')}. Fuse three identical pets to make one stronger one (unlocks with your first plot expansion).
             </div>
             <button onClick={resetAll} className="mt-3 text-[11px] underline opacity-50 hover:opacity-100">Reset all progress</button>
           </div>

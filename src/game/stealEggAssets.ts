@@ -5,7 +5,7 @@ const eggUrls = import.meta.glob('@/assets/stealegg/eggs/*.webp', { eager: true,
 const animalUrls = import.meta.glob('@/assets/stealegg/animals/*.webp', { eager: true, query: '?url', import: 'default' }) as Record<string, string>;
 
 // Hell monsters: one horizontal strip per animation (idle / walk / attack). cell = frame size, bbox = the body inside the idle frame.
-const monsterUrls = import.meta.glob('@/assets/stealegg/monsters/*.{png,webp}', { eager: true, query: '?url', import: 'default' }) as Record<string, string>;
+const monsterUrls = import.meta.glob('@/assets/stealegg/{monsters,dino}/*.{png,webp}', { eager: true, query: '?url', import: 'default' }) as Record<string, string>;
 export const MONSTER: Record<string, { cell: [number, number]; bbox: [number, number, number, number]; frames: Record<string, number>; cols?: Record<string, number>; facesLeft: boolean; fps: Record<string, number> }> = {
   fireworm:     { cell: [90, 90],   bbox: [17, 13, 69, 58],   frames: { idle: 9, walk: 9, attack: 16 }, facesLeft: false, fps: { idle: 9, walk: 12, attack: 18 } },
   skullwolf:    { cell: [64, 64],   bbox: [2, 39, 63, 64],    frames: { idle: 6, attack: 5 },          facesLeft: true,  fps: { idle: 8, attack: 14 } },
@@ -14,6 +14,12 @@ export const MONSTER: Record<string, { cell: [number, number]; bbox: [number, nu
   // Fire Dragon: 5x5 grids (idle, walk) and an 8x8 grid (run), 192 px cells, faces right
   dragon:       { cell: [192, 192], bbox: [37, 50, 157, 141], frames: { idle: 25, walk: 25, run: 64 }, cols: { idle: 5, walk: 5, run: 8 }, facesLeft: false, fps: { idle: 10, walk: 14, run: 24 } },
   gollux:       { cell: [160, 128], bbox: [51, 68, 116, 128], frames: { idle: 5, walk: 8, attack: 17 }, facesLeft: true,  fps: { idle: 6, walk: 10, attack: 20 } },
+  // Jurassic dinosaurs: horizontal strips, all face right
+  brachio:      { cell: [64, 64],   bbox: [4, 5, 59, 53],    frames: { idle: 2, walk: 13, attack: 15 }, facesLeft: false, fps: { idle: 4, walk: 10, attack: 12 } },
+  trike:        { cell: [64, 64],   bbox: [4, 16, 60, 51],   frames: { idle: 2, walk: 9, attack: 6 },   facesLeft: false, fps: { idle: 4, walk: 10, attack: 12 } },
+  spino:        { cell: [64, 64],   bbox: [2, 13, 62, 51],   frames: { idle: 2, walk: 11, attack: 5 },  facesLeft: false, fps: { idle: 4, walk: 10, attack: 12 } },
+  raptor:       { cell: [128, 64],  bbox: [37, 38, 89, 64],  frames: { idle: 2, walk: 6, run: 6, attack: 10, readypounce: 2, pounce: 1 }, facesLeft: false, fps: { idle: 5, walk: 12, run: 16, attack: 16, readypounce: 8, pounce: 8 } },
+  trex:         { cell: [320, 128], bbox: [12, 35, 309, 126], frames: { idle: 1, walk: 4, run: 4, attack: 7 }, facesLeft: false, fps: { idle: 6, walk: 8, run: 12, attack: 12 } },
 };
 export const monsterImgs: Record<string, HTMLImageElement> = {};   // key like "demon_walk"
 

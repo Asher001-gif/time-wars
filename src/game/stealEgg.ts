@@ -2,12 +2,15 @@
 
 export type Tier = 'common' | 'uncommon' | 'rare' | 'epic';
 export type Species = 'chicken' | 'duck' | 'sheep' | 'pig' | 'cow' | 'fox' | 'heron' | 'horse' | 'wolf'
-  | 'fireworm' | 'skullwolf' | 'demon' | 'bloodmonster' | 'gollux' | 'dragon';   // the last five live in Hell
-export type Realm = 'farm' | 'hell';
+  | 'fireworm' | 'skullwolf' | 'demon' | 'bloodmonster' | 'gollux' | 'dragon'   // the last five live in Hell
+  | 'brachio' | 'trike' | 'spino' | 'raptor' | 'trex';   // Jurassic dinosaurs
+export type Realm = 'farm' | 'hell' | 'jura';
 
 export const FARM_W = 3600;                 // the farm map
 export const HELL_X = FARM_W;               // Hell starts where the farm ends (long side)
-export const WORLD_W = 7400;                // farm 3600 + hell 3800
+export const JURA_X = 7400;                 // Jurassic starts where Hell ends (east)
+export const JURA_W = 7200;                 // twice as long as the farm
+export const WORLD_W = JURA_X + JURA_W;     // farm 3600 + hell 3800 + jurassic 7200
 export const WORLD_H = 2200;
 
 export const TIERS: Tier[] = ['common', 'uncommon', 'rare', 'epic'];
@@ -36,7 +39,14 @@ export const HELL_TIER_INFO: Partial<Record<Tier, TierInfo>> = {
   // the Dragon egg: the heaviest egg in the game. 5000 speed -> 500 while carrying it, and its guard is the fastest of all.
   epic:     { label: 'LEGENDARY', color: '#ff7a1a', hatch: 300, guard: 'wolf', guardSpeed: 7000, weight: 0.90, eggH: 210, speedBonus: 1500 },
 };
-export const SPECIES: Record<Species, { name: string; tier: Tier; rate: number; size: number; hell?: boolean; penH?: number }> = {
+/* Jurassic: guardSpeed / weight are chosen so the 'need' speed shown on each nest is: common 30000 (the map minimum), rare 100000, T-rex 500000
+   (need = guardSpeed / (1 - weight)). Carrying the T-rex egg at 500000 leaves you exactly 20000 = the T-rex's own speed. */
+export const JURA_TIER_INFO: Partial<Record<Tier, TierInfo>> = {
+  common: { label: 'Common', color: '#e8e8e8', hatch: 40,  guard: 'wolf', guardSpeed: 12000, weight: 0.60, eggH: 130, speedBonus: 4000 },
+  rare:   { label: 'Rare',   color: '#4aa8ff', hatch: 240, guard: 'wolf', guardSpeed: 30000, weight: 0.70, eggH: 180, speedBonus: 25000 },
+  epic:   { label: 'EPIC T-REX', color: '#b565ff', hatch: 600, guard: 'wolf', guardSpeed: 20000, weight: 0.96, eggH: 250, speedBonus: 150000 },
+};
+export const SPECIES: Record<Species, { name: string; tier: Tier; rate: number; size: number; hell?: boolean; jura?: boolean; penH?: number }> = {
   chicken: { name: 'Chicken', tier: 'common',   rate: 1,    size: 52 },
   duck:    { name: 'Duck',    tier: 'common',   rate: 1.3,  size: 56 },
   sheep:   { name: 'Sheep',   tier: 'uncommon', rate: 3,    size: 74 },
@@ -53,9 +63,16 @@ export const SPECIES: Record<Species, { name: string; tier: Tier; rate: number; 
   bloodmonster: { name: 'Blood Fiend',  tier: 'uncommon', rate: 11000, size: 138, hell: true, penH: 64 },
   gollux:       { name: 'Gollux',       tier: 'rare',     rate: 50000, size: 230, hell: true, penH: 76 },
   dragon:       { name: 'Fire Dragon',  tier: 'epic',     rate: 250000, size: 330, hell: true, penH: 84 },
+  // Jurassic dinosaurs (hell:true = drawn with the monster sprite pipeline). size = on-screen body height; the T-rex is ~3x wider than tall.
+  brachio:      { name: 'Brachiosaurus', tier: 'common',  rate: 300000,   size: 340, hell: true, jura: true, penH: 70 },
+  trike:        { name: 'Triceratops',   tier: 'common',  rate: 380000,   size: 240, hell: true, jura: true, penH: 52 },
+  spino:        { name: 'Spinosaurus',   tier: 'rare',    rate: 1800000,  size: 280, hell: true, jura: true, penH: 52 },
+  raptor:       { name: 'Raptor',        tier: 'rare',    rate: 2400000,  size: 180, hell: true, jura: true, penH: 42 },
+  trex:         { name: 'T-Rex',         tier: 'epic',    rate: 14000000, size: 300, hell: true, jura: true, penH: 30 },
 };
-export const infoOf = (sp: Species): TierInfo => (SPECIES[sp].hell ? HELL_TIER_INFO[SPECIES[sp].tier]! : TIER_INFO[SPECIES[sp].tier]);
+export const infoOf = (sp: Species): TierInfo => (SPECIES[sp].jura ? JURA_TIER_INFO[SPECIES[sp].tier]! : SPECIES[sp].hell ? HELL_TIER_INFO[SPECIES[sp].tier]! : TIER_INFO[SPECIES[sp].tier]);
 export const HELL_SPECIES_BY_TIER: Partial<Record<Tier, Species[]>> = { common: ['fireworm', 'skullwolf'], uncommon: ['demon', 'bloodmonster'], rare: ['gollux'], epic: ['dragon'] };
+export const JURA_SPECIES_BY_TIER: Partial<Record<Tier, Species[]>> = { common: ['brachio', 'trike'], rare: ['spino', 'raptor'], epic: ['trex'] };
 
 export const SPECIES_BY_TIER: Record<Tier, Species[]> = {
   common: ['chicken', 'duck'],
@@ -193,11 +210,21 @@ export function makeNests(): NestDef[] {
       if (out.every(o => Math.hypot(o.x - x, o.y - y) > 380)) { out.push({ x, y, tier, realm: 'hell' }); have++; }
     }
   }
+  // Jurassic: 5 common, 4 rare, ONE T-rex nest deep at the far end
+  const JB: Partial<Record<Tier, [number, number, number]>> = { common: [JURA_X + 600, JURA_X + 3200, 5], rare: [JURA_X + 3000, JURA_X + 5900, 4], epic: [JURA_X + 6000, JURA_X + 6900, 1] };
+  for (const tier of TIERS) {
+    const b = JB[tier]; if (!b) continue;
+    const [x0, x1, n] = b; let guard = 0, have = 0;
+    while (have < n && guard++ < 800) {
+      const x = x0 + r() * (x1 - x0), y = 330 + r() * (WORLD_H - 660);
+      if (out.every(o => Math.hypot(o.x - x, o.y - y) > 560)) { out.push({ x, y, tier, realm: 'jura' }); have++; }
+    }
+  }
   return out;
 }
 
 export interface Deco { x: number; y: number; k: number; v: number }
-export function makeDeco(nests: NestDef[]): { tufts: Deco[]; flowers: Deco[]; trees: Deco[]; rocks: Deco[]; cracks: Deco[] } {
+export function makeDeco(nests: NestDef[]): { tufts: Deco[]; flowers: Deco[]; trees: Deco[]; rocks: Deco[]; cracks: Deco[]; jtrees: Deco[]; ferns: Deco[]; boulders: Deco[]; hides: Deco[] } {
   const r = rng(5);
   const free = (x: number, y: number, pad: number) =>
     !(x > PLOT_X - 60 && x < PLOT_X + 1300 && y > PLOT_Y - 220 && y < PLOT_Y + 1000) && nests.every(n => Math.hypot(n.x - x, n.y - y) > pad);
@@ -208,10 +235,19 @@ export function makeDeco(nests: NestDef[]): { tufts: Deco[]; flowers: Deco[]; tr
   };
   const hell = (n: number, pad: number) => {
     const a: Deco[] = [];
-    while (a.length < n) { const x = HELL_X + 60 + r() * (WORLD_W - HELL_X - 120), y = r() * WORLD_H; if (nests.every(o => Math.hypot(o.x - x, o.y - y) > pad)) a.push({ x, y, k: r(), v: r() }); }
+    while (a.length < n) { const x = HELL_X + 60 + r() * (JURA_X - HELL_X - 120), y = r() * WORLD_H; if (nests.every(o => Math.hypot(o.x - x, o.y - y) > pad)) a.push({ x, y, k: r(), v: r() }); }
     return a;
   };
-  return { tufts: make(520, 60), flowers: make(150, 60), trees: make(42, 200), rocks: hell(90, 90), cracks: hell(70, 70) };
+  const jura = (n: number, pad: number, gap = 0) => {
+    const a: Deco[] = []; let guard = 0;
+    while (a.length < n && guard++ < 5000) {
+      const x = JURA_X + 80 + r() * (JURA_W - 160), y = 80 + r() * (WORLD_H - 160);
+      if (nests.every(o => Math.hypot(o.x - x, o.y - y) > pad) && a.every(b => Math.hypot(b.x - x, b.y - y) > gap)) a.push({ x, y, k: r(), v: r() });
+    }
+    return a;
+  };
+  return { tufts: make(520, 60), flowers: make(150, 60), trees: make(42, 200), rocks: hell(90, 90), cracks: hell(70, 70),
+    jtrees: jura(80, 230), ferns: jura(300, 90), boulders: jura(70, 130), hides: jura(40, 320, 380) };
 }
 
 /* ---------- dirt pits: slow you down while you stand in them ---------- */
@@ -227,9 +263,19 @@ export function makePits(nests: NestDef[]): Pit[] {
   }
   guard = 0;
   while (out.length < 34 && guard++ < 1200) {      // lava pools in Hell
-    const x = HELL_X + 250 + r() * (WORLD_W - HELL_X - 500), y = 150 + r() * (WORLD_H - 300), rad = 40 + r() * 28;
+    const x = HELL_X + 250 + r() * (JURA_X - HELL_X - 500), y = 150 + r() * (WORLD_H - 300), rad = 40 + r() * 28;
     if (nests.every(n => Math.hypot(n.x - x, n.y - y) > 190) && out.every(o => Math.hypot(o.x - x, o.y - y) > 150)) out.push({ x, y, r: rad });
   }
   return out;
 }
 export const inPit = (pits: Pit[], x: number, y: number) => pits.some(p => ((x - p.x) / p.r) ** 2 + ((y - p.y) / (p.r * PIT_SQUASH)) ** 2 < 1);
+
+/* ---------- Jurassic: hiding ferns + speed compression ---------- */
+export const HIDE_R = 130;      // stand inside a fern patch to hide from guards that are more than ~260px away
+const JURA_K = 1200, JURA_REF = 30000, JURA_EXP = 0.27;
+/** Speed is a STAT; this turns it into pixels per second. Small speeds are unchanged; huge ones are compressed so 100000 / 500000
+ *  still feels fast but readable. Guards use the same curve, so who wins a chase never changes (it is monotonic). */
+export function moveSpeed(v: number, x: number): number {
+  if (x >= JURA_X) return Math.min(v, JURA_K * Math.pow(Math.max(v, 1) / JURA_REF, JURA_EXP));   // Jurassic: 30000 -> 1200 px/s, 100000 -> ~1660, 500000 -> ~2560
+  return v <= 5000 ? v : 5000 * Math.pow(v / 5000, 0.15);                                          // farm + Hell: unchanged up to 5000
+}
