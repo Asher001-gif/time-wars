@@ -14,8 +14,9 @@ const FW = 136, FH = 144, S = 1.7;              // sprite frame size + draw scal
 const REST_Y = GROUND - 30;                       // Asteron floats above the ground
 const SPEED = 6, AI_SPEED = 5.2, JUMP_V = 17.5, GRAV = 0.9;
 const PUNCH_FRAME_MS = 45, PUNCH_MS = 360, PUNCH_HIT_AT = 150, PUNCH_CD = 480, REACH = 150;
+const COMBO_MAX = 3, COMBO_WINDOW = 1000, COMBO_CD = 1500, COMBO_KB = 34, COMBO_STUN = 380;
 const CHARGE_MS = 240, RECOVER_MS = 280, DASH_SPEED = 40;
-export const MAX_HP = 100, XP_SKILL = 50, XP_ULT = 100;
+export const MAX_HP = 250, XP_SKILL = 50, XP_ULT = 100;
 const DMG = { punch: 4, skill: 15, ult: 35 } as const;
 // ultimate timeline (ms)
 const T_DROP = 1400, T_LEAVE = 2200, T_END = 3400;
@@ -32,7 +33,7 @@ export interface Fighter {
   x: number; y: number; vx: number; vy: number; kx: number;
   face: 1 | -1; hp: number; hpTrail: number; xp: number;
   act: Action; t: number; cd: number; hitDone: boolean; stun: number; flash: number;
-  tilt: number; moving: boolean; inv: boolean; grace: number;
+  tilt: number; moving: boolean; inv: boolean; grace: number; combo: number; comboT: number; fin: boolean;
   dashDir: 1 | -1; dashDest: number; dashHit: boolean;
   ai: { think: number; mode: number; modeT: number; dodgeX: number | null; dodgeAt: number; skillAt: number; inp: Input };
 }
@@ -119,7 +120,7 @@ const easeOut = (t: number) => 1 - Math.pow(1 - clamp(t, 0, 1), 3);
 function mkFighter(id: 0 | 1, human: boolean, name: string, x: number, face: 1 | -1): Fighter {
   return {
     id, human, name, x, y: REST_Y, vx: 0, vy: 0, kx: 0, face, hp: MAX_HP, hpTrail: MAX_HP, xp: 0,
-    act: 'idle', t: 0, cd: 0, hitDone: false, stun: 0, flash: 0, tilt: 0, moving: false, inv: false, grace: 0,
+    act: 'idle', t: 0, cd: 0, hitDone: false, stun: 0, flash: 0, tilt: 0, moving: false, inv: false, grace: 0, combo: 0, comboT: 0, fin: false,
     dashDir: 1, dashDest: 0, dashHit: false,
     ai: { think: 600, mode: 0, modeT: 0, dodgeX: null, dodgeAt: 0, skillAt: 0, inp: newInput() },
   };
@@ -180,7 +181,12 @@ function damage(g: Game, att: Fighter, def: Fighter, kind: 'punch' | 'skill' | '
   return true;
 }
 
-function startPunch(f: Fighter) { f.act = 'punch'; f.t = 0; f.hitDone = false; f.cd = PUNCH_CD; f.vx = 0; sfx.whoosh(); }
+function startPunch(f: Fighter) {
+  f.act = 'punch'; f.t = 0; f.hitDone = false; f.vx = 0; sfx.whoosh();
+  f.combo += 1; f.comboT = COMBO_WINDOW; f.fin = f.combo >= COMBO_MAX;
+  // after 3 punches the puncher has to wait (cooldown); the opponent gets knocked back on the 3rd
+  if (f.combo >= COMBO_MAX) { f.cd = COMBO_CD; f.combo = 0; f.comboT = 0; } else f.cd = PUNCH_CD;
+}
 
 function startSkill(g: Game, f: Fighter, o: Fighter) {
   f.xp -= XP_SKILL; f.act = 'charge'; f.t = 0; f.vx = 0; f.inv = false;
@@ -298,12 +304,20 @@ function aiControl(g: Game, f: Fighter, o: Fighter) {
 /* ============================ UPDATE ============================ */
 function updateFighter(g: Game, f: Fighter, o: Fighter) {
   f.t += DT; f.grace = Math.max(0, f.grace - DT); f.cd = Math.max(0, f.cd - DT); f.flash = Math.max(0, f.flash - DT);
+  if (f.comboT > 0) { f.comboT -= DT; if (f.comboT <= 0) f.combo = 0; }
   switch (f.act) {
     case 'punch':
       if (!f.hitDone && f.t >= PUNCH_HIT_AT) {
         f.hitDone = true;
         const dx = (o.x - f.x) * f.face;
-        if (dx > -30 && dx < REACH && Math.abs(o.y - f.y) < 170) damage(g, f, o, 'punch', DMG.punch, f.face);
+        if (dx > -30 && dx < REACH && Math.abs(o.y - f.y) < 170) {
+          const finisher = f.fin;   // this is the 3rd punch of the combo
+          if (damage(g, f, o, 'punch', DMG.punch, f.face) && finisher && o.act === 'hit') {
+            o.kx = f.face * COMBO_KB; o.stun = COMBO_STUN;   // opponent flies back: walk forward again to punch
+            g.shake = Math.max(g.shake, 14);
+            g.pops.push({ x: o.x, y: o.y - FH * S - 20, text: 'KNOCKBACK!', t: 0, color: '#ffd23f', big: true });
+          }
+        }
       }
       if (f.t >= PUNCH_MS) { f.act = 'idle'; f.t = 0; }
       break;
@@ -583,8 +597,10 @@ export function renderCombat(ctx: CanvasRenderingContext2D, g: Game, cw: number,
   ctx.save();
   ctx.translate(ox + (Math.random() - 0.5) * sh * k, oy + (Math.random() - 0.5) * sh * k);
   ctx.scale(k, k);
-  ctx.beginPath(); ctx.rect(-BGX, -400, BGW, H + 400 + 400); ctx.clip();
+  ctx.beginPath(); ctx.rect(-BGX - 2000, -2000, BGW + 4000, H + 4000); ctx.clip();
   ctx.imageSmoothingEnabled = true;
+  ctx.fillStyle = '#071735'; ctx.fillRect(-BGX - 2000, -2000, BGW + 4000, 2000);          // sky above the arena (fills the whole screen)
+  ctx.fillStyle = '#0a1630'; ctx.fillRect(-BGX - 2000, H, BGW + 4000, 2000);               // ground below the arena
   ctx.drawImage(bgCanvas!, -BGX, 0);
   // drifting clouds
   for (const c of clouds) { ctx.globalAlpha = 0.38; ctx.drawImage(cloudSprites[c.k % cloudSprites.length], c.x, c.y, 320 * c.s, 90 * c.s); }
