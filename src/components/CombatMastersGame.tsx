@@ -18,7 +18,7 @@ export default function CombatMastersGame({ onExit }: Props) {
   const [round, setRound] = useState(0);
   const [muted, setMutedState] = useState(isMuted());
   const [banner, setBanner] = useState(true);
-  const [result, setResult] = useState<null | { won: boolean }>(null);
+  const [result, setResult] = useState<null | { won: boolean; draw: boolean }>(null);
   const [xp, setXp] = useState(0);
   const isMobile = useIsMobileDevice();
   const isPortrait = useIsPortrait();
@@ -89,7 +89,7 @@ export default function CombatMastersGame({ onExit }: Props) {
       acc = Math.min(acc + (time - last), DT * 5); last = time;
       const g = gameRef.current;
       while (acc >= DT) { stepCombat(g, inputRef.current); driftClouds(cloudsRef.current); acc -= DT; }
-      if (g.phase === 'over' && !g.reported) { g.reported = true; setResult({ won: g.winner === 0 }); }
+      if (g.phase === 'over' && !g.reported) { g.reported = true; setResult({ won: g.winner === 0, draw: g.winner < 0 }); }
       renderCombat(ctx, g, cw, ch, dpr, cloudsRef.current);
       raf = requestAnimationFrame(loop);
     };
@@ -154,8 +154,8 @@ export default function CombatMastersGame({ onExit }: Props) {
       {result && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/90 backdrop-blur-sm">
           <div className="text-center space-y-5 p-8 rounded-xl border border-border bg-card shadow-2xl max-w-md">
-            <h1 className="text-4xl font-bold font-mono tracking-wider" style={{ color: result.won ? '#3dba6f' : '#e03030' }}>
-              {result.won ? '🏆 YOU WIN!' : 'YOU LOSE'}
+            <h1 className="text-4xl font-bold font-mono tracking-wider" style={{ color: result.draw ? '#ffd23f' : result.won ? '#3dba6f' : '#e03030' }}>
+              {result.draw ? 'DRAW!' : result.won ? '🏆 YOU WIN!' : 'YOU LOSE'}
             </h1>
             <div className="flex flex-col gap-3">
               <button onClick={rematch} className="px-8 py-3 rounded-lg font-mono font-bold text-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity">REMATCH</button>
