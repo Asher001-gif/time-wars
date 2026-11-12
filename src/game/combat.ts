@@ -35,7 +35,7 @@ export interface Fighter {
   dashDir: 1 | -1; dashDest: number; dashHit: boolean;
   ai: { think: number; mode: number; modeT: number; dodgeX: number | null; dodgeAt: number; skillAt: number; inp: Input };
 }
-interface Ult { owner: number; t: number; dir: 1 | -1; cx0: number; tx: number; dropped: boolean; bomb: { x: number; y: number; vy: number } | null; blasted: boolean; tBlast: number; reacted: boolean; broken: boolean; bt: number; bcx: number; aiSeen: boolean }
+interface Ult { owner: number; t: number; dir: 1 | -1; cx0: number; tx: number; dropped: boolean; bomb: { x: number; y: number; vy: number } | null; blasted: boolean; tBlast: number; reacted: boolean }
 interface Particle { x: number; y: number; vx: number; vy: number; g: number; life: number; max: number; color: string; size: number; streak?: boolean }
 interface Pop { x: number; y: number; text: string; t: number; color: string; big: boolean }
 interface Ghost { x: number; y: number; face: 1 | -1; frame: number; ttl: number; sx: number }
@@ -162,17 +162,6 @@ function damage(g: Game, att: Fighter, def: Fighter, kind: 'punch' | 'skill' | '
     g.pops.push({ x: W / 2, y: 250, text: 'DOUBLE K.O.!', t: 0, color: '#ffd23f', big: true });
     return true;
   }
-  // ULT BREAK: a skill hit before the bomb drops shatters the ultimate (the ship flees, the XP is gone)
-  if (kind === 'skill' && def.act === 'ult') {
-    const u = g.ults.find(q => q.owner === def.id && !q.dropped && !q.broken);
-    if (u) {
-      u.broken = true; u.bt = 0; u.bcx = shipCx(u); u.t = Math.max(u.t, T_LEAVE);
-      def.act = 'idle';                                   // falls through to the normal hit reaction below
-      att.xp = Math.min(XP_ULT, att.xp + 15);
-      g.pops.push({ x: def.x, y: def.y - FH * S - 30, text: 'ULT BROKEN!', t: 0, color: '#ff8dff', big: true });
-      g.whiteout = Math.max(g.whiteout, 0.35); g.shake = Math.max(g.shake, 22);
-    }
-  }
   if (def.hp <= 0) {
     def.act = 'ko'; def.t = 0; def.kx = dir * 16; def.vy = -11; def.inv = false;
     g.phase = 'ko'; g.phaseT = 0; g.winner = att.id; g.shake = 26; g.slow = 0.35;
@@ -183,15 +172,12 @@ function damage(g: Game, att: Fighter, def: Fighter, kind: 'punch' | 'skill' | '
   if (def.act !== 'ult') {                       // an ultimate can't be cancelled by damage
     def.act = 'hit'; def.t = 0; def.hitDone = true;
     def.stun = kind === 'punch' ? 240 : kind === 'skill' ? 520 : 750;
-    if (u_broken(g, def)) def.stun = 800;
     def.kx = dir * (kind === 'punch' ? 9 : kind === 'skill' ? 16 : 22);
     if (kind !== 'punch') def.vy = -6;
     def.hitDone = false;
   }
   return true;
 }
-
-function u_broken(g: Game, f: Fighter) { return g.ults.some(q => q.owner === f.id && q.broken && q.bt === 0); }
 
 function startPunch(f: Fighter) { f.act = 'punch'; f.t = 0; f.hitDone = false; f.cd = PUNCH_CD; f.vx = 0; sfx.whoosh(); }
 
@@ -213,12 +199,11 @@ function beginDash(g: Game, f: Fighter, o: Fighter) {
 function startUlt(g: Game, f: Fighter, o: Fighter) {
   f.xp = 0; f.act = 'ult'; f.t = 0; f.vx = 0;
   const dir: 1 | -1 = f.face;
-  g.ults.push({ owner: f.id, t: 0, dir, cx0: dir > 0 ? -SHIP_W / 2 - 60 : W + SHIP_W / 2 + 60, tx: o.x, dropped: false, bomb: null, blasted: false, tBlast: 0, reacted: false, broken: false, bt: 0, bcx: 0, aiSeen: false });
+  g.ults.push({ owner: f.id, t: 0, dir, cx0: dir > 0 ? -SHIP_W / 2 - 60 : W + SHIP_W / 2 + 60, tx: o.x, dropped: false, bomb: null, blasted: false, tBlast: 0, reacted: false });
   sfx.ship();
 }
 
 function shipCx(u: Ult): number {
-  if (u.broken) { const e = clamp(u.bt / 800, 0, 1); return u.bcx + u.dir * e * e * e * (W + SHIP_W); }
   const t = u.t;
   if (t < T_DROP) return lerp(u.cx0, u.tx, easeOut(t / T_DROP));
   if (t < T_LEAVE) return u.tx + u.dir * (t - T_DROP) * 0.03;
@@ -281,11 +266,6 @@ function aiControl(g: Game, f: Fighter, o: Fighter) {
     const r = Math.random();
     if (r < 0.2) { a.dodgeX = clamp(f.x + (f.x < u.tx ? -1 : 1) * 420, 100, W - 100); a.dodgeAt = g.time + rnd(80, 200); }
     else if (r < 0.4 && f.xp >= XP_SKILL) a.skillAt = g.time + rnd(120, 260);
-  }
-  for (const u of g.ults) {
-    if (u.owner === f.id || u.aiSeen || u.dropped || u.broken) continue;
-    u.aiSeen = true;
-    if (f.xp >= XP_SKILL && Math.random() < 0.5) a.skillAt = g.time + rnd(250, 700);
   }
   if (a.skillAt && g.time >= a.skillAt) { a.skillAt = 0; inp.skill = 8; }
   if (a.dodgeX !== null) {
@@ -365,7 +345,6 @@ function updateFighter(g: Game, f: Fighter, o: Fighter) {
 function updateUlts(g: Game) {
   for (const u of g.ults) {
     u.t += DT;
-    if (u.broken) { u.bt += DT; continue; }
     const owner = g.f[u.owner], foe = g.f[1 - u.owner];
     if (!u.dropped) {
       if (owner.act === 'ko') { u.t = T_END + 1; continue; }
@@ -385,8 +364,8 @@ function updateUlts(g: Game) {
       owner.act = 'idle'; owner.t = 0;
     }
   }
-  g.ults = g.ults.filter(u => u.t <= T_END && !(u.broken && u.bt > 900));
-  for (const f of g.f) if (f.act === 'ult' && !g.ults.some(u => u.owner === f.id && !u.broken)) { f.act = 'idle'; f.t = 0; }
+  g.ults = g.ults.filter(u => u.t <= T_END);
+  for (const f of g.f) if (f.act === 'ult' && !g.ults.some(u => u.owner === f.id)) { f.act = 'idle'; f.t = 0; }
 }
 
 export function stepCombat(g: Game, inp: Input) {
@@ -401,17 +380,12 @@ export function stepCombat(g: Game, inp: Input) {
   applyInput(g, o, p, o.ai.inp);
   updateFighter(g, p, o); updateFighter(g, o, p);
   updateUlts(g);
-  // CLASH: both dashing and crossing paths -> both bounce off, nobody is damaged, both get 25 XP back
+  // both dash and cross paths: they simply hit each other (neither is invulnerable to the other's dash)
   if (p.act === 'dash' && o.act === 'dash' && p.dashDir !== o.dashDir && (p.x - o.x) * p.dashDir >= 0) {
-    const mid = (p.x + o.x) / 2;
-    for (const f of [p, o]) {
-      f.act = 'hit'; f.t = 0; f.stun = 450; f.inv = false; f.kx = -f.dashDir * 14; f.xp = Math.min(XP_ULT, f.xp + 25);
-      f.x = mid - f.dashDir * 50; f.face = (-f.dashDir) as 1 | -1;
-    }
-    g.rings.push({ x: mid, y: p.y - 100, t: 0, max: 500, color: '#ffffff' });
-    burst(g, mid, p.y - 100, '#ffffff', 30, 12);
-    g.pops.push({ x: mid, y: p.y - FH * S - 20, text: 'CLASH!', t: 0, color: '#ffffff', big: true });
-    g.shake = Math.max(g.shake, 24); sfx.hit();
+    const pd = p.dashDir, od = o.dashDir;
+    p.inv = false; o.inv = false; p.grace = 0; o.grace = 0;
+    damage(g, p, o, 'skill', DMG.skill, pd);
+    damage(g, o, p, 'skill', DMG.skill, od);
   }
   // keep the two fighters from overlapping (not while dashing through)
   if (!p.inv && !o.inv && p.act !== 'ko' && o.act !== 'ko' && Math.abs(p.y - o.y) < 150) {
