@@ -587,6 +587,48 @@ function drawFighter(ctx: CanvasRenderingContext2D, g: Game, f: Fighter) {
   void air;
 }
 
+
+/* ============================ BEAST K.O. BANNER ============================ */
+function drawKO(ctx: CanvasRenderingContext2D, g: Game) {
+  const dbl = g.winner < 0, text = dbl ? 'DOUBLE K.O.' : 'K.O.';
+  const t = g.phase === 'over' ? 2000 + g.phaseT : g.phaseT;            // ms since the knockout
+  const slam = clamp(t / 220, 0, 1);
+  const sc = slam < 1 ? lerp(4.2, 0.92, easeOut(slam)) : 1 + Math.sin(t / 130) * 0.025 + Math.max(0, 0.08 - (t - 220) / 1500);
+  const size = dbl ? 190 : 270, cx = W / 2, cy = 380;
+  const c1 = dbl ? '#fff2a8' : '#ffe27a', c2 = dbl ? '#ffb020' : '#ff3b2f', c3 = dbl ? '#d96a00' : '#8f0a14';
+  ctx.save();
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  // dark vignette so the word pops
+  ctx.globalAlpha = clamp(t / 250, 0, 0.55); ctx.fillStyle = '#000'; ctx.fillRect(-BGX, -400, BGW, H + 800); ctx.globalAlpha = 1;
+  // spinning slash rays behind the word
+  ctx.save(); ctx.translate(cx, cy); ctx.rotate(t / 2200);
+  const rays = 18, ra = clamp(t / 300, 0, 1) * 0.35;
+  for (let i = 0; i < rays; i++) {
+    ctx.rotate(Math.PI * 2 / rays); ctx.fillStyle = i % 2 ? `rgba(255,70,50,${ra})` : `rgba(255,210,80,${ra * 0.7})`;
+    ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(1500, -60); ctx.lineTo(1500, 60); ctx.closePath(); ctx.fill();
+  }
+  ctx.restore();
+  // shockwave ring on impact
+  if (t < 600) { const e = easeOut(t / 600); ctx.globalAlpha = 1 - e; ctx.strokeStyle = '#fff'; ctx.lineWidth = 26 * (1 - e) + 3; ctx.beginPath(); ctx.arc(cx, cy, 80 + e * 900, 0, 7); ctx.stroke(); ctx.globalAlpha = 1; }
+  // the word: slam in, then shake a little
+  const jx = t < 900 ? (Math.random() - 0.5) * 14 * (1 - t / 900) : 0, jy = t < 900 ? (Math.random() - 0.5) * 14 * (1 - t / 900) : 0;
+  ctx.translate(cx + jx, cy + jy); ctx.rotate(-0.07); ctx.scale(sc, sc);
+  ctx.font = `900 ${size}px Impact, "Arial Black", ui-monospace, sans-serif`;
+  ctx.lineJoin = 'round'; ctx.miterLimit = 2;
+  ctx.shadowColor = dbl ? 'rgba(255,170,30,0.9)' : 'rgba(255,40,30,0.95)'; ctx.shadowBlur = 50 + Math.sin(t / 90) * 14;
+  ctx.lineWidth = size * 0.17; ctx.strokeStyle = '#000'; ctx.strokeText(text, 0, 14);                // heavy black outline
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = c3; ctx.fillText(text, 0, size * 0.045 + 14);                                         // 3D extrusion
+  ctx.lineWidth = size * 0.07; ctx.strokeStyle = '#fff'; ctx.strokeText(text, 0, 14);                  // white rim
+  const gr = ctx.createLinearGradient(0, -size * 0.5, 0, size * 0.5);
+  gr.addColorStop(0, c1); gr.addColorStop(0.5, c2); gr.addColorStop(1, c3);
+  ctx.fillStyle = gr; ctx.fillText(text, 0, 14);
+  // glossy sweep
+  ctx.save(); ctx.beginPath(); ctx.rect(-W, -size, W * 2, size * 0.5 + 14); ctx.clip();
+  ctx.fillStyle = 'rgba(255,255,255,0.28)'; ctx.fillText(text, 0, 14); ctx.restore();
+  ctx.restore();
+}
+
 export function renderCombat(ctx: CanvasRenderingContext2D, g: Game, cw: number, ch: number, dpr: number, clouds: { x: number; y: number; k: number; s: number; v: number }[]) {
   if (!bgCanvas) buildBackground();
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -694,7 +736,7 @@ export function renderCombat(ctx: CanvasRenderingContext2D, g: Game, cw: number,
     if (g.phaseT < 1000) banner('READY?', '#9cc4ff', 110);
     else banner('FIGHT!', '#ffd23f', 150, Math.min(1, (INTRO_MS - g.phaseT) / 300 + 0.2));
   } else if (g.phase === 'fight' && g.phaseT < 500) banner('FIGHT!', '#ffd23f', 150, 1 - g.phaseT / 500);
-  if (g.phase === 'ko' || g.phase === 'over') { if (g.winner < 0) banner('DOUBLE K.O.!', '#ffd23f', 130); else banner('K.O.!', '#ff5a68', 170); }
+  if (g.phase === 'ko' || g.phase === 'over') drawKO(ctx, g);
   if (g.hint) { ctx.font = 'bold 26px ui-monospace, Menlo, monospace'; ctx.fillStyle = '#ffd23f'; ctx.shadowColor = '#000'; ctx.shadowBlur = 6; ctx.fillText(g.hint.text, W / 2, 170); ctx.shadowBlur = 0; }
   ctx.restore();
 }
