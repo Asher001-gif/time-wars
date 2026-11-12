@@ -4,7 +4,7 @@ import RotateDevicePrompt from './RotateDevicePrompt';
 import { useIsMobileDevice, useIsPortrait } from '@/hooks/use-device';
 import {
   Game, Input, XP_SKILL, XP_ULT, createCombat, driftClouds, isMuted, makeClouds, newInput,
-  preloadCombat, renderCombat, setMuted, stepCombat, unlockAudio, DT,
+  preloadCombat, renderCombat, setMuted, stepCombat, stopMusic, unlockAudio, DT,
 } from '@/game/combat';
 
 interface Props { onExit: () => void }
@@ -23,7 +23,7 @@ export default function CombatMastersGame({ onExit }: Props) {
   const isMobile = useIsMobileDevice();
   const isPortrait = useIsPortrait();
 
-  useEffect(() => { preloadCombat().then(() => setReady(true)); }, []);
+  useEffect(() => { preloadCombat().then(() => setReady(true)); return () => stopMusic(0.1); }, []);
   useEffect(() => {
     unlockAudio();
     const go = () => unlockAudio();
@@ -42,7 +42,7 @@ export default function CombatMastersGame({ onExit }: Props) {
       else if (k === '4' && !e.repeat) i.punch = 8;
       else if (k === '2' && !e.repeat) i.skill = 8;
       else if (k === '8' && !e.repeat) i.ult = 8;
-      else if (k === 'm' && !e.repeat) { const m = !isMuted(); setMuted(m); setMutedState(m); }
+      else if (k === 'm' && !e.repeat) { const m = !isMuted(); setMuted(m); setMutedState(m); if (m) stopMusic(0.1); }
       if (['arrowleft', 'arrowright', 'arrowup', 'arrowdown', ' '].includes(k)) e.preventDefault();
     };
     const up = (e: KeyboardEvent) => {
@@ -103,7 +103,7 @@ export default function CombatMastersGame({ onExit }: Props) {
     inputRef.current = newInput();
     setResult(null); setRound(r => r + 1);
   };
-  const toggleMute = () => { const m = !isMuted(); setMuted(m); setMutedState(m); };
+  const toggleMute = () => { const m = !isMuted(); setMuted(m); setMutedState(m); if (m) stopMusic(0.1); };
 
   const btn = (label: string, style: React.CSSProperties, onDown: () => void, onUp?: () => void) => (
     <button

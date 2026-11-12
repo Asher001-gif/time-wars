@@ -107,9 +107,78 @@ const sfx = {
   ship: () => tone(70, 55, 1.4, 'sawtooth', 0.09),
   drop: () => tone(900, 200, 0.6, 'sine', 0.07),
   boom: () => { noise(1.1, 0.5, 700); tone(90, 30, 0.9, 'sine', 0.35); },
-  ko: () => tone(300, 40, 0.8, 'square', 0.12),
+  ko: () => { tone(300, 40, 0.8, 'square', 0.12); noise(1.2, 0.55, 900); tone(70, 28, 1.1, 'sine', 0.45); setTimeout(() => { tone(520, 90, 0.5, 'sawtooth', 0.12); noise(0.5, 0.3, 3000); }, 160); },
+  jump: () => tone(260, 620, 0.14, 'triangle', 0.07),
+  land: () => { noise(0.07, 0.12, 900); tone(110, 60, 0.08, 'sine', 0.1); },
+  knock: () => { noise(0.22, 0.45, 1400); tone(120, 35, 0.3, 'sawtooth', 0.22); tone(900, 200, 0.18, 'square', 0.06); },
+  combo: (n: number) => tone(440 + n * 220, 660 + n * 330, 0.09, 'square', 0.05),
+  skillReady: () => { tone(520, 780, 0.12, 'triangle', 0.08); setTimeout(() => tone(780, 1040, 0.12, 'triangle', 0.08), 110); },
   ready: () => tone(660, 990, 0.15, 'triangle', 0.08),
 };
+
+
+/* ============================ MUSIC (synth battle loop) ============================ */
+const BPM = 148, STEP = 60 / BPM / 4;               // 16th note length (s)
+const NOTE = (n: number) => 440 * Math.pow(2, (n - 69) / 12);
+// A minor, 2 bars (32 steps); numbers are semitones above A (null = rest)
+const BASS: (number | null)[] = [0,null,0,null, 0,null,12,null, -2,null,-2,null, -2,null,10,null, -4,null,-4,null, -4,null,8,null, -5,null,-5,null, -5,null,7,null];
+const ARP = [0, 3, 7, 12, 7, 3, 0, 3];
+const LEAD: (number | null)[] = [24,null,null,27, null,26,null,24, null,null,19,null, 22,null,24,null, 29,null,null,27, null,26,null,24, 22,null,19,null, 17,null,19,null];
+let musicTimer: number | null = null, musicGain: GainNode | null = null, nextT = 0, stepI = 0, noiseBuf: AudioBuffer | null = null, intense = false;
+function mtone(f: number, type: OscillatorType, t: number, dur: number, vol: number) {
+  if (!actx || !musicGain) return;
+  const o = actx.createOscillator(), g = actx.createGain();
+  o.type = type; o.frequency.setValueAtTime(f, t);
+  g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vol, t + 0.008); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  o.connect(g).connect(musicGain); o.start(t); o.stop(t + dur + 0.02);
+}
+function mnoise(t: number, dur: number, vol: number, hp: number) {
+  if (!actx || !musicGain) return;
+  if (!noiseBuf) { noiseBuf = actx.createBuffer(1, actx.sampleRate, actx.sampleRate); const d = noiseBuf.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1; }
+  const s = actx.createBufferSource(), g = actx.createGain(), f = actx.createBiquadFilter();
+  f.type = 'highpass'; f.frequency.value = hp; s.buffer = noiseBuf;
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  s.connect(f).connect(g).connect(musicGain); s.start(t); s.stop(t + dur);
+}
+function scheduleStep(i: number, t: number) {
+  const k = i % 32, beat = k % 4 === 0;
+  if (!actx) return;
+  // drums: four-on-the-floor kick, snare on 2 & 4, driving hats
+  if (beat && (k % 8 === 0 || k % 8 === 4 || intense)) { const o = actx.createOscillator(), g = actx.createGain(); o.frequency.setValueAtTime(160, t); o.frequency.exponentialRampToValueAtTime(40, t + 0.14); g.gain.setValueAtTime(0.9, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.18); o.connect(g).connect(musicGain!); o.start(t); o.stop(t + 0.2); }
+  if (k % 8 === 4) { mnoise(t, 0.16, 0.5, 1500); mtone(190, 'triangle', t, 0.1, 0.25); }
+  if (k % 2 === 0 || intense) mnoise(t, 0.04, k % 4 === 2 ? 0.22 : 0.12, 7000);
+  // bass
+  const b = BASS[k]; if (b !== null) mtone(NOTE(33 + b), 'sawtooth', t, STEP * 1.8, 0.2);
+  // pulsing arpeggio pad
+  const chordRoot = [0, -2, -4, -5][Math.floor(k / 8)];
+  mtone(NOTE(57 + chordRoot + ARP[k % 8]), 'square', t, STEP * 0.8, 0.045);
+  // lead melody enters when a fight gets tense (either fighter under 40% HP) or after the first loop
+  const l = LEAD[k]; if (l !== null && (intense || i >= 32)) mtone(NOTE(57 + l), 'sawtooth', t, STEP * 2.2, 0.07);
+}
+function musicPump() {
+  if (!actx || muted || !musicGain) return;
+  while (nextT < actx.currentTime + 0.35) { scheduleStep(stepI, Math.max(nextT, actx.currentTime)); nextT += STEP; stepI++; }
+}
+export function startMusic() {
+  if (!actx || musicTimer !== null) return;
+  try {
+    musicGain = actx.createGain(); musicGain.gain.value = 0.0001; musicGain.connect(actx.destination);
+    musicGain.gain.exponentialRampToValueAtTime(0.38, actx.currentTime + 0.8);
+    nextT = actx.currentTime + 0.05; stepI = 0;
+    musicTimer = window.setInterval(musicPump, 90);
+  } catch { /* no audio */ }
+}
+export function stopMusic(fade = 0.6) {
+  if (musicTimer !== null) { clearInterval(musicTimer); musicTimer = null; }
+  const mg = musicGain; musicGain = null;
+  if (mg && actx) { try { mg.gain.cancelScheduledValues(actx.currentTime); mg.gain.setValueAtTime(Math.max(0.0001, mg.gain.value), actx.currentTime); mg.gain.exponentialRampToValueAtTime(0.0001, actx.currentTime + fade); setTimeout(() => mg.disconnect(), fade * 1000 + 100); } catch { /* ignore */ } }
+}
+function musicUpdate(g: Game) {
+  const live = (g.phase === 'intro' || g.phase === 'fight') && !muted;
+  if (live && musicTimer === null) startMusic();
+  else if (!live && musicTimer !== null) stopMusic(g.phase === 'ko' ? 0.15 : 0.6);
+  intense = g.f.some(f => f.hp < MAX_HP * 0.4);
+}
 
 /* ============================ HELPERS ============================ */
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
@@ -153,7 +222,7 @@ function damage(g: Game, att: Fighter, def: Fighter, kind: 'punch' | 'skill' | '
   }
   def.hp = Math.max(0, def.hp - amount);
   def.flash = 140;
-  att.xp = Math.min(XP_ULT, att.xp + (kind === 'punch' ? 8 : kind === 'skill' ? 10 : 0));
+  const hadSkill = att.xp >= XP_SKILL; att.xp = Math.min(XP_ULT, att.xp + (kind === 'punch' ? 8 : kind === 'skill' ? 10 : 0)); if (att.human && !hadSkill && att.xp >= XP_SKILL) sfx.skillReady();
   def.xp = Math.min(XP_ULT, def.xp + amount * 0.7);
   g.pops.push({ x: def.x + rnd(-20, 20), y: def.y - FH * S + 10, text: String(Math.round(amount)), t: 0, color: kind === 'ult' ? '#ffd23f' : kind === 'skill' ? '#6fd3ff' : '#ffffff', big: kind !== 'punch' });
   burst(g, def.x, def.y - 100, kind === 'punch' ? '#ffffff' : '#7fd0ff', kind === 'punch' ? 8 : 18, kind === 'punch' ? 5 : 9);
@@ -183,7 +252,7 @@ function damage(g: Game, att: Fighter, def: Fighter, kind: 'punch' | 'skill' | '
 
 function startPunch(f: Fighter) {
   f.act = 'punch'; f.t = 0; f.hitDone = false; f.vx = 0; sfx.whoosh();
-  f.combo += 1; f.comboT = COMBO_WINDOW; f.fin = f.combo >= COMBO_MAX;
+  f.combo += 1; f.comboT = COMBO_WINDOW; if (f.human) sfx.combo(f.combo); f.fin = f.combo >= COMBO_MAX;
   // after 3 punches the puncher has to wait (cooldown); the opponent gets knocked back on the 3rd
   if (f.combo >= COMBO_MAX) { f.cd = COMBO_CD; f.combo = 0; f.comboT = 0; } else f.cd = PUNCH_CD;
 }
@@ -247,7 +316,7 @@ function applyInput(g: Game, f: Fighter, o: Fighter, inp: Input) {
   if (dir !== 0) { f.face = dir as 1 | -1; f.moving = true; }
   else if (!f.human && o.act !== 'ko') f.face = o.x >= f.x ? 1 : -1;   // opponent turns to face you when it stops
   const grounded = f.y >= REST_Y - 1;
-  if (inp.jump > 0 && grounded) { f.vy = -JUMP_V; inp.jump = 0; }
+  if (inp.jump > 0 && grounded) { f.vy = -JUMP_V; inp.jump = 0; sfx.jump(); }
   if (inp.punch > 0 && f.cd <= 0) { startPunch(f); inp.punch = 0; return; }
   if (inp.skill > 0) {
     if (f.xp >= XP_SKILL) { startSkill(g, f, o); inp.skill = 0; return; }
@@ -314,7 +383,7 @@ function updateFighter(g: Game, f: Fighter, o: Fighter) {
           const finisher = f.fin;   // this is the 3rd punch of the combo
           if (damage(g, f, o, 'punch', DMG.punch, f.face) && finisher && o.act === 'hit') {
             o.kx = f.face * COMBO_KB; o.stun = COMBO_STUN;   // opponent flies back: walk forward again to punch
-            g.shake = Math.max(g.shake, 14);
+            g.shake = Math.max(g.shake, 14); sfx.knock();
             g.pops.push({ x: o.x, y: o.y - FH * S - 20, text: 'KNOCKBACK!', t: 0, color: '#ffd23f', big: true });
           }
         }
@@ -348,7 +417,7 @@ function updateFighter(g: Game, f: Fighter, o: Fighter) {
   }
   // physics
   if (f.act !== 'dash' && f.act !== 'charge') {
-    if (f.y < REST_Y || f.vy < 0) { f.vy += GRAV; f.y += f.vy; if (f.y >= REST_Y) { f.y = REST_Y; f.vy = 0; } }
+    if (f.y < REST_Y || f.vy < 0) { f.vy += GRAV; f.y += f.vy; if (f.y >= REST_Y) { f.y = REST_Y; if (f.vy > 8) sfx.land(); f.vy = 0; } }
   }
   if (f.act !== 'dash') { f.x += f.vx + f.kx; f.kx *= 0.86; if (Math.abs(f.kx) < 0.1) f.kx = 0; }
   f.x = clamp(f.x, 80, W - 80);
@@ -384,6 +453,7 @@ function updateUlts(g: Game) {
 }
 
 export function stepCombat(g: Game, inp: Input) {
+  musicUpdate(g);
   const dt = DT * g.slow;
   g.time += dt; g.phaseT += dt;
   const [p, o] = g.f;
@@ -444,7 +514,7 @@ function buildBackground() {
   let seed = 7; const r = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
   for (let i = 0; i < 90; i++) { x.fillStyle = `rgba(255,255,255,${0.15 + r() * 0.4})`; const s = r() < 0.15 ? 2 : 1; x.fillRect(r() * BGW, r() * 260, s, s); }
   // soft moon glow
-  const mx = BGX + 1180, my = 150;
+  const mx = BGX + 1180, my = 270;
   const glow = x.createRadialGradient(mx, my, 0, mx, my, 220);
   glow.addColorStop(0, 'rgba(235,245,255,0.55)'); glow.addColorStop(0.2, 'rgba(190,220,255,0.22)'); glow.addColorStop(1, 'rgba(190,220,255,0)');
   x.fillStyle = glow; x.fillRect(mx - 240, my - 240, 480, 480);
