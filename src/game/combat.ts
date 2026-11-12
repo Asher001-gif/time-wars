@@ -5,6 +5,7 @@ import punchWUrl from '@/assets/combat/punch_w.png';
 import bombUrl from '@/assets/combat/bomb.png';
 import shipUrl from '@/assets/combat/ship.webp';
 import explosionUrl from '@/assets/combat/explosion.png';
+import profileUrl from '@/assets/combat/profile.webp';
 
 /* ============================ CONSTANTS ============================ */
 export const W = 1600, H = 800, GROUND = 700;
@@ -49,7 +50,7 @@ export interface Game {
 }
 
 /* ============================ ASSETS ============================ */
-const urls = { idleE: idleEUrl, idleW: idleWUrl, punchE: punchEUrl, punchW: punchWUrl, bomb: bombUrl, ship: shipUrl, boom: explosionUrl };
+const urls = { idleE: idleEUrl, idleW: idleWUrl, punchE: punchEUrl, punchW: punchWUrl, bomb: bombUrl, ship: shipUrl, boom: explosionUrl, profile: profileUrl };
 const imgs = {} as Record<keyof typeof urls, HTMLImageElement>;
 const tints: Record<string, HTMLCanvasElement> = {};
 let preloadP: Promise<void> | null = null;
@@ -496,7 +497,8 @@ function drawHud(ctx: CanvasRenderingContext2D, g: Game, f: Fighter, right: bool
   const ICON = 86, BW = 400, y = 30, pad = 130;
   const ix = right ? W - pad - ICON : pad;
   const bx = right ? ix - 16 - BW : ix + ICON + 16;
-  ctx.fillStyle = '#000'; ctx.fillRect(ix, y, ICON, ICON);                       // profile icon (black for now)
+  ctx.fillStyle = '#000'; ctx.fillRect(ix, y, ICON, ICON);                       // profile icon
+  if (imgs.profile.width) { ctx.imageSmoothingEnabled = true; ctx.drawImage(imgs.profile, ix, y, ICON, ICON); }
   ctx.strokeStyle = f.human ? '#6aa8ff' : '#ff6a78'; ctx.lineWidth = 4; ctx.strokeRect(ix, y, ICON, ICON);
   ctx.font = 'bold 22px ui-monospace, Menlo, monospace'; ctx.textBaseline = 'alphabetic';
   ctx.fillStyle = '#fff'; ctx.textAlign = right ? 'right' : 'left';
