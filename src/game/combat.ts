@@ -17,8 +17,8 @@ const CHARGE_MS = 240, RECOVER_MS = 280, DASH_SPEED = 40;
 export const MAX_HP = 100, XP_SKILL = 50, XP_ULT = 100;
 const DMG = { punch: 4, skill: 15, ult: 35 } as const;
 // ultimate timeline (ms)
-const T_LOCK = 950, T_DROP = 1400, T_LEAVE = 2200, T_END = 3400;
-const SHIP_W = 2400, SHIP_BOTTOM = 270, BLAST_R = 240;
+const T_DROP = 1400, T_LEAVE = 2200, T_END = 3400;
+const SHIP_W = 2400, SHIP_BOTTOM = 270, BLAST_R = 260, BOMB_HOMING = 4.5, GRACE_MS = 350;
 const INTRO_MS = 1900;
 
 /* ============================ TYPES ============================ */
@@ -31,9 +31,9 @@ export interface Fighter {
   x: number; y: number; vx: number; vy: number; kx: number;
   face: 1 | -1; hp: number; hpTrail: number; xp: number;
   act: Action; t: number; cd: number; hitDone: boolean; stun: number; flash: number;
-  tilt: number; moving: boolean; inv: boolean;
+  tilt: number; moving: boolean; inv: boolean; grace: number;
   dashDir: 1 | -1; dashDest: number; dashHit: boolean;
-  ai: { think: number; mode: number; modeT: number; dodgeX: number | null; dodgeAt: number; inp: Input };
+  ai: { think: number; mode: number; modeT: number; dodgeX: number | null; dodgeAt: number; skillAt: number; inp: Input };
 }
 interface Ult { owner: number; t: number; dir: 1 | -1; cx0: number; tx: number; dropped: boolean; bomb: { x: number; y: number; vy: number } | null; blasted: boolean; tBlast: number; reacted: boolean }
 interface Particle { x: number; y: number; vx: number; vy: number; g: number; life: number; max: number; color: string; size: number; streak?: boolean }
@@ -118,9 +118,9 @@ const easeOut = (t: number) => 1 - Math.pow(1 - clamp(t, 0, 1), 3);
 function mkFighter(id: 0 | 1, human: boolean, name: string, x: number, face: 1 | -1): Fighter {
   return {
     id, human, name, x, y: REST_Y, vx: 0, vy: 0, kx: 0, face, hp: MAX_HP, hpTrail: MAX_HP, xp: 0,
-    act: 'idle', t: 0, cd: 0, hitDone: false, stun: 0, flash: 0, tilt: 0, moving: false, inv: false,
+    act: 'idle', t: 0, cd: 0, hitDone: false, stun: 0, flash: 0, tilt: 0, moving: false, inv: false, grace: 0,
     dashDir: 1, dashDest: 0, dashHit: false,
-    ai: { think: 600, mode: 0, modeT: 0, dodgeX: null, dodgeAt: 0, inp: newInput() },
+    ai: { think: 600, mode: 0, modeT: 0, dodgeX: null, dodgeAt: 0, skillAt: 0, inp: newInput() },
   };
 }
 
@@ -141,7 +141,11 @@ function burst(g: Game, x: number, y: number, color: string, n: number, speed: n
 
 /* ============================ COMBAT ACTIONS ============================ */
 function damage(g: Game, att: Fighter, def: Fighter, kind: 'punch' | 'skill' | 'ult', amount: number, dir: number): boolean {
-  if (def.inv || def.act === 'ko' || g.phase === 'ko' || g.phase === 'over') return false;
+  if (def.act === 'ko' || g.phase === 'ko' || g.phase === 'over') return false;
+  if (def.inv || def.grace > 0) {                 // dashing through it / just got up: nothing lands
+    if (kind === 'ult') g.pops.push({ x: def.x, y: def.y - FH * S + 10, text: 'DODGED!', t: 0, color: '#7fd0ff', big: true });
+    return false;
+  }
   def.hp = Math.max(0, def.hp - amount);
   def.flash = 140;
   att.xp = Math.min(XP_ULT, att.xp + (kind === 'punch' ? 8 : kind === 'skill' ? 10 : 0));
@@ -162,6 +166,7 @@ function damage(g: Game, att: Fighter, def: Fighter, kind: 'punch' | 'skill' | '
     def.stun = kind === 'punch' ? 240 : kind === 'skill' ? 520 : 750;
     def.kx = dir * (kind === 'punch' ? 9 : kind === 'skill' ? 16 : 22);
     if (kind !== 'punch') def.vy = -6;
+    def.hitDone = false;
   }
   return true;
 }
@@ -198,11 +203,12 @@ function shipCx(u: Ult): number {
   return u.tx + u.dir * (T_LEAVE - T_DROP) * 0.03 + u.dir * e * e * e * (W + SHIP_W);
 }
 
-function blast(g: Game, u: Ult, x: number) {
+function blast(g: Game, u: Ult, x: number, y: number) {
   const owner = g.f[u.owner], foe = g.f[1 - u.owner];
-  g.booms.push({ x, y: GROUND - 150, t: 0, scale: 6.4, delay: 0 });
-  g.booms.push({ x: x - 190, y: GROUND - 120, t: 0, scale: 4.4, delay: 110 });
-  g.booms.push({ x: x + 200, y: GROUND - 120, t: 0, scale: 4.8, delay: 190 });
+  const by = Math.min(GROUND - 150, y);
+  g.booms.push({ x, y: by, t: 0, scale: 6.4, delay: 0 });
+  g.booms.push({ x: x - 190, y: by + 30, t: 0, scale: 4.4, delay: 110 });
+  g.booms.push({ x: x + 200, y: by + 30, t: 0, scale: 4.8, delay: 190 });
   g.rings.push({ x, y: GROUND, t: 0, max: 700, color: '#ffd27a' });
   g.rings.push({ x, y: GROUND, t: -120, max: 900, color: '#ff8a3d' });
   g.whiteout = 1; g.shake = 46; sfx.boom();
@@ -211,7 +217,7 @@ function blast(g: Game, u: Ult, x: number) {
     g.parts.push({ x: x + rnd(-60, 60), y: GROUND - 40, vx: Math.cos(a) * s, vy: Math.sin(a) * s, g: 0.5, life: 0, max: rnd(600, 1300), color: ['#ffd23f', '#ff8a3d', '#ff4d2d', '#fff4c2'][i % 4], size: rnd(4, 11) });
   }
   const dx = foe.x - x;
-  if (Math.abs(dx) < BLAST_R && foe.act !== 'ko') {
+  if (Math.abs(dx) < BLAST_R && foe.act !== 'ko') {          // radius damage: full on a direct hit, 65% at the edge
     damage(g, owner, foe, 'ult', Math.round(DMG.ult * (1 - 0.35 * Math.abs(dx) / BLAST_R)), dx >= 0 ? 1 : -1);
   }
 }
@@ -245,19 +251,15 @@ function aiControl(g: Game, f: Fighter, o: Fighter) {
   inp.jump = Math.max(0, inp.jump - 1); inp.punch = Math.max(0, inp.punch - 1);
   inp.skill = Math.max(0, inp.skill - 1); inp.ult = Math.max(0, inp.ult - 1);
   if (g.phase !== 'fight' || o.act === 'ko') { inp.left = inp.right = false; return; }
-  // react to an incoming bomb zone
+  // react to a falling bomb: rarely run, rarely counter with the (invulnerable) dash
   for (const u of g.ults) {
-    if (u.owner === f.id || u.reacted) continue;
-    if (u.t >= T_LOCK + 150) {
-      u.reacted = true;
-      if (Math.abs(f.x - u.tx) < BLAST_R + 50 && Math.random() < 0.72) {
-        const L = u.tx - BLAST_R - 70, R = u.tx + BLAST_R + 70;
-        const okL = L > 100, okR = R < W - 100;
-        a.dodgeX = okL && okR ? (f.x < u.tx ? L : R) : okL ? L : okR ? R : (f.x < u.tx ? 100 : W - 100);
-        a.dodgeAt = g.time + rnd(120, 380);
-      }
-    }
+    if (u.owner === f.id || u.reacted || !u.dropped) continue;
+    u.reacted = true;
+    const r = Math.random();
+    if (r < 0.2) { a.dodgeX = clamp(f.x + (f.x < u.tx ? -1 : 1) * 420, 100, W - 100); a.dodgeAt = g.time + rnd(80, 200); }
+    else if (r < 0.4 && f.xp >= XP_SKILL) a.skillAt = g.time + rnd(120, 260);
   }
+  if (a.skillAt && g.time >= a.skillAt) { a.skillAt = 0; inp.skill = 8; }
   if (a.dodgeX !== null) {
     if (g.time >= a.dodgeAt && f.act === 'idle') {
       const d = a.dodgeX - f.x;
@@ -286,7 +288,7 @@ function aiControl(g: Game, f: Fighter, o: Fighter) {
 
 /* ============================ UPDATE ============================ */
 function updateFighter(g: Game, f: Fighter, o: Fighter) {
-  f.t += DT; f.cd = Math.max(0, f.cd - DT); f.flash = Math.max(0, f.flash - DT);
+  f.t += DT; f.grace = Math.max(0, f.grace - DT); f.cd = Math.max(0, f.cd - DT); f.flash = Math.max(0, f.flash - DT);
   switch (f.act) {
     case 'punch':
       if (!f.hitDone && f.t >= PUNCH_HIT_AT) {
@@ -318,7 +320,7 @@ function updateFighter(g: Game, f: Fighter, o: Fighter) {
       break;
     }
     case 'recover': if (f.t >= RECOVER_MS) { f.act = 'idle'; f.t = 0; } break;
-    case 'hit': if (f.t >= f.stun) { f.act = 'idle'; f.t = 0; } break;
+    case 'hit': if (f.t >= f.stun) { f.act = 'idle'; f.t = 0; if (f.stun >= 500) f.grace = GRACE_MS; } break;
     default: break;
   }
   // physics
@@ -338,15 +340,18 @@ function updateUlts(g: Game) {
     const owner = g.f[u.owner], foe = g.f[1 - u.owner];
     if (!u.dropped) {
       if (owner.act === 'ko') { u.t = T_END + 1; continue; }
-      if (u.t < T_LOCK) u.tx = clamp(foe.x, 150, W - 150);
+      u.tx = clamp(foe.x, 100, W - 100);
       if (u.t >= T_DROP) {
         u.dropped = true;
         u.bomb = { x: shipCx(u), y: SHIP_BOTTOM - 10, vy: 2 };
         sfx.drop();
       }
     } else if (u.bomb) {
-      u.bomb.vy += 0.75; u.bomb.y += u.bomb.vy;
-      if (u.bomb.y >= GROUND - 40) { blast(g, u, u.bomb.x); u.bomb = null; u.blasted = true; u.tBlast = u.t; }
+      const bm = u.bomb;
+      bm.vy += 0.75; bm.y += bm.vy;
+      if (foe.act !== 'ko') bm.x += clamp(foe.x - bm.x, -BOMB_HOMING, BOMB_HOMING);   // locks on: it chases its target
+      const contact = foe.act !== 'ko' && Math.abs(bm.x - foe.x) < 70 && bm.y >= foe.y - FH * S * 0.8 && bm.y < foe.y;
+      if (bm.y >= GROUND - 40 || contact) { blast(g, u, bm.x, bm.y); u.bomb = null; u.blasted = true; u.tBlast = u.t; }
     } else if (u.blasted && u.t >= u.tBlast + 350 && owner.act === 'ult') {
       owner.act = 'idle'; owner.t = 0;
     }
@@ -522,6 +527,7 @@ function drawFighter(ctx: CanvasRenderingContext2D, g: Game, f: Fighter) {
   let rot = f.tilt;
   if (f.act === 'ko') rot = -f.face * Math.min(1.45, f.t * 0.0035);
   ctx.rotate(rot); ctx.scale(sx, sy);
+  if (f.grace > 0) ctx.globalAlpha = 0.45 + 0.35 * Math.sin(g.time / 40);
   if (f.act === 'charge' || f.act === 'dash') {
     const gl = ctx.createRadialGradient(0, 0, 10, 0, 0, 170);
     gl.addColorStop(0, 'rgba(110,190,255,0.75)'); gl.addColorStop(1, 'rgba(110,190,255,0)');
@@ -536,6 +542,7 @@ function drawFighter(ctx: CanvasRenderingContext2D, g: Game, f: Fighter) {
     ctx.globalAlpha = Math.min(1, f.flash / 100) * 0.9;
     ctx.drawImage(tint(key, '#ffffff'), frame * FW, 0, FW, FH, -FW * S / 2, -FH * S / 2, FW * S, FH * S); ctx.globalAlpha = 1;
   }
+  ctx.globalAlpha = 1;
   ctx.restore();
   if (f.act !== 'ko') {   // name tag
     const ty = f.y - FH * S - 14 + bob;
@@ -569,17 +576,6 @@ export function renderCombat(ctx: CanvasRenderingContext2D, g: Game, cw: number,
   let dim = 0;
   for (const u of g.ults) dim = Math.max(dim, u.t < 500 ? u.t / 500 : u.t < T_LEAVE ? 1 : Math.max(0, 1 - (u.t - T_LEAVE) / 900));
   if (dim > 0) { ctx.fillStyle = `rgba(2,8,28,${0.4 * dim})`; ctx.fillRect(-BGX, -400, BGW, H + 800); }
-  // danger zones
-  for (const u of g.ults) {
-    if (u.t < 300 || u.blasted) continue;
-    const locked = u.t >= T_LOCK, a = Math.min(1, (u.t - 300) / 300);
-    ctx.save(); ctx.translate(u.tx, GROUND + 6); ctx.scale(1, 0.16);
-    ctx.beginPath(); ctx.arc(0, 0, BLAST_R, 0, 7);
-    ctx.fillStyle = locked ? `rgba(255,60,50,${0.2 * a + 0.08 * Math.sin(g.time / 90)})` : `rgba(255,190,70,${0.1 * a})`; ctx.fill();
-    ctx.setLineDash(locked ? [] : [18, 14]); ctx.lineWidth = 8;
-    ctx.strokeStyle = locked ? `rgba(255,90,70,${0.9 * a})` : `rgba(255,210,110,${0.7 * a})`; ctx.stroke();
-    ctx.restore();
-  }
   // ship(s) – huge, only the underside is visible
   const ship = imgs.ship;
   for (const u of g.ults) {
