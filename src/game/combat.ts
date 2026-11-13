@@ -268,7 +268,8 @@ function damage(g: Game, att: Fighter, def: Fighter, kind: 'punch' | 'skill' | '
     sfx.ko();
     return true;
   }
-  if (def.act !== 'ult') {                       // an ultimate can't be cancelled by damage
+  const trading = kind === 'punch' && def.act === 'punch' && !def.hitDone;   // both swinging: both punches land
+  if (def.act !== 'ult' && !trading) {           // an ultimate can't be cancelled by damage
     def.act = 'hit'; def.t = 0; def.hitDone = true;
     def.stun = kind === 'punch' ? 240 : kind === 'skill' ? 520 : 750;
     def.kx = dir * (kind === 'punch' ? 9 : kind === 'skill' ? 16 : 22);
@@ -492,7 +493,7 @@ function updateHand(g: Game, u: Ult, owner: Fighter, foe: Fighter) {
     burst(g, x, GROUND - 60, '#ff5a2d', 30, 12, 8); burst(g, x, GROUND - 40, '#6b2a1c', 20, 9, 10);
     g.shake = Math.max(g.shake, 34); sfx.snap();
     const dx = foe.x - x;
-    if (Math.abs(dx) < HAND_R && foe.y > REST_Y - 140 && foe.act !== 'ko') {   // jump over it or dash through it to avoid
+    if (Math.abs(dx) < HAND_R && foe.act !== 'ko') {   // too big to jump over: only a dash or running away avoids it
       damage(g, owner, foe, 'ult', Math.round(DMG.ult * (1 - 0.3 * Math.abs(dx) / HAND_R)), dx >= 0 ? 1 : -1);
     }
   } else if (u.blasted && u.t >= u.tBlast + 350 && owner.act === 'ult') { owner.act = 'idle'; owner.t = 0; }
@@ -544,6 +545,13 @@ export function stepCombat(g: Game, inp: Input) {
     const foe = g.f[1 - s.owner];
     if (!s.hit && foe.act !== 'ko' && Math.abs(s.x - foe.x) < SLASH_R && foe.y > REST_Y - 110 && damage(g, g.f[s.owner], foe, 'skill', DMG.skill, s.dir)) {
       s.hit = true; burst(g, foe.x, GROUND - 120, '#ff8a3d', 26, 11, 8); g.rings.push({ x: foe.x, y: GROUND, t: 0, max: 400, color: '#ff6a2a' });
+    }
+  }
+  for (const a of g.slashes) for (const b of g.slashes) {
+    if (a.owner < b.owner && !a.hit && !b.hit && Math.abs(a.x - b.x) < 100) {
+      a.hit = b.hit = true; const cx = (a.x + b.x) / 2;
+      burst(g, cx, a.y, '#ffd23f', 30, 12, 9); g.rings.push({ x: cx, y: a.y, t: 0, max: 500, color: '#ffb347' });
+      g.pops.push({ x: cx, y: a.y - 70, text: 'CLASH!', t: 0, color: '#ffd23f', big: true }); g.shake = Math.max(g.shake, 14); sfx.hit();
     }
   }
   g.slashes = g.slashes.filter(s => !s.hit && s.x > -300 && s.x < W + 300);
