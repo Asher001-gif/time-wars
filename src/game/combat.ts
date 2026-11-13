@@ -6,6 +6,19 @@ import bombUrl from '@/assets/combat/bomb.png';
 import shipUrl from '@/assets/combat/ship.webp';
 import explosionUrl from '@/assets/combat/explosion.png';
 import profileUrl from '@/assets/combat/profile.webp';
+import redlaIconUrl from '@/assets/combat/redla_icon.webp';
+
+// Redla sprite sheets (horizontal strips), keyed by file name e.g. run_e
+const sheetFiles = import.meta.glob('/src/assets/combat/redla/*.png', { eager: true, query: '?url', import: 'default' }) as Record<string, string>;
+const sheetUrls: Record<string, string> = {};
+for (const k of Object.keys(sheetFiles)) sheetUrls[k.split('/').pop()!.replace('.png', '')] = sheetFiles[k];
+// frame size, feet line (bottom of the character inside the frame) and frame count
+const SHEETS: Record<string, { fw: number; feet: number; n: number }> = {
+  idle: { fw: 48, feet: 47, n: 1 }, run: { fw: 80, feet: 64, n: 4 }, jump: { fw: 80, feet: 64, n: 9 },
+  cross: { fw: 80, feet: 63, n: 6 }, kick: { fw: 68, feet: 57, n: 8 }, sword: { fw: 68, feet: 57, n: 12 },
+  die: { fw: 80, feet: 64, n: 7 }, up: { fw: 80, feet: 64, n: 5 },
+  hand_idle: { fw: 40, feet: 39, n: 1 }, hand_snap: { fw: 56, feet: 47, n: 9 },
+};
 
 /* ============================ CONSTANTS ============================ */
 export const W = 1600, H = 800, GROUND = 700;
@@ -22,14 +35,22 @@ const DMG = { punch: 4, skill: 15, ult: 35 } as const;
 const T_DROP = 1400, T_LEAVE = 2200, T_END = 3400;
 const SHIP_W = 2400, SHIP_BOTTOM = 270, BLAST_R = 260, BOMB_HOMING = 4.5, GRACE_MS = 350;
 const INTRO_MS = 1900;
+// Redla
+export const REDLA_HP = 290;
+const RS = 5.2, HS = 11;                                   // Redla / giant-hand pixel scale
+const R_PUNCH_MS = 320, R_HIT_AT = 165, R_KICK_REACH = 180;
+const SWORD_MS = 840, SWORD_SPAWN = 560, SLASH_V = 17, SLASH_R = 85;
+const HAND_RISE = 650, HAND_SPEED = 13, HAND_STOP = 150, HAND_FRAME_MS = 90, HAND_HIT_AT = 360, HAND_R = 250;
 
 /* ============================ TYPES ============================ */
-export type Action = 'idle' | 'punch' | 'charge' | 'dash' | 'recover' | 'ult' | 'hit' | 'ko';
+export type Char = 'asteron' | 'redla';
+export const CHAR_LABEL: Record<Char, string> = { asteron: 'ASTERON', redla: 'REDLA' };
+export type Action = 'idle' | 'punch' | 'charge' | 'dash' | 'recover' | 'ult' | 'hit' | 'ko' | 'sword';
 export interface Input { left: boolean; right: boolean; jump: number; punch: number; skill: number; ult: number }
 export const newInput = (): Input => ({ left: false, right: false, jump: 0, punch: 0, skill: 0, ult: 0 });
 
 export interface Fighter {
-  id: 0 | 1; human: boolean; name: string;
+  id: 0 | 1; human: boolean; name: string; char: Char; maxHp: number; slashDone: boolean;
   x: number; y: number; vx: number; vy: number; kx: number;
   face: 1 | -1; hp: number; hpTrail: number; xp: number;
   act: Action; t: number; cd: number; hitDone: boolean; stun: number; flash: number;
@@ -37,7 +58,8 @@ export interface Fighter {
   dashDir: 1 | -1; dashDest: number; dashHit: boolean;
   ai: { think: number; mode: number; modeT: number; dodgeX: number | null; dodgeAt: number; skillAt: number; inp: Input };
 }
-interface Ult { owner: number; t: number; dir: 1 | -1; cx0: number; tx: number; dropped: boolean; bomb: { x: number; y: number; vy: number } | null; blasted: boolean; tBlast: number; reacted: boolean }
+interface Slash { owner: number; x: number; y: number; dir: 1 | -1; t: number; hit: boolean }
+interface Ult { kind: 'ship' | 'hand'; end: number; hx: number; snapT: number; owner: number; t: number; dir: 1 | -1; cx0: number; tx: number; dropped: boolean; bomb: { x: number; y: number; vy: number } | null; blasted: boolean; tBlast: number; reacted: boolean }
 interface Particle { x: number; y: number; vx: number; vy: number; g: number; life: number; max: number; color: string; size: number; streak?: boolean }
 interface Pop { x: number; y: number; text: string; t: number; color: string; big: boolean }
 interface Ghost { x: number; y: number; face: 1 | -1; frame: number; ttl: number; sx: number }
@@ -45,27 +67,27 @@ interface Boom { x: number; y: number; t: number; scale: number; delay: number }
 interface Ring { x: number; y: number; t: number; max: number; color: string }
 export interface Game {
   f: [Fighter, Fighter]; time: number; phase: 'intro' | 'fight' | 'ko' | 'over'; phaseT: number;
-  ults: Ult[]; booms: Boom[]; rings: Ring[]; parts: Particle[]; pops: Pop[]; ghosts: Ghost[];
+  ults: Ult[]; slashes: Slash[]; booms: Boom[]; rings: Ring[]; parts: Particle[]; pops: Pop[]; ghosts: Ghost[];
   shake: number; whiteout: number; winner: number; reported: boolean;
   hint: { text: string; t: number } | null; slow: number;
 }
 
 /* ============================ ASSETS ============================ */
-const urls = { idleE: idleEUrl, idleW: idleWUrl, punchE: punchEUrl, punchW: punchWUrl, bomb: bombUrl, ship: shipUrl, boom: explosionUrl, profile: profileUrl };
-const imgs = {} as Record<keyof typeof urls, HTMLImageElement>;
+const urls: Record<string, string> = { idleE: idleEUrl, idleW: idleWUrl, punchE: punchEUrl, punchW: punchWUrl, bomb: bombUrl, ship: shipUrl, boom: explosionUrl, profile: profileUrl, redlaIcon: redlaIconUrl, ...sheetUrls };
+const imgs = {} as Record<string, HTMLImageElement>;
 const tints: Record<string, HTMLCanvasElement> = {};
 let preloadP: Promise<void> | null = null;
 
 export function preloadCombat(): Promise<void> {
   if (preloadP) return preloadP;
-  preloadP = Promise.all((Object.keys(urls) as (keyof typeof urls)[]).map(k => new Promise<void>(res => {
+  preloadP = Promise.all(Object.keys(urls).map(k => new Promise<void>(res => {
     const im = new Image(); imgs[k] = im;
     im.onload = () => res(); im.onerror = () => res();
     im.src = urls[k];
   }))).then(() => undefined);
   return preloadP;
 }
-function tint(key: keyof typeof urls, color: string): HTMLCanvasElement {
+function tint(key: string, color: string): HTMLCanvasElement {
   const id = key + color;
   if (tints[id]) return tints[id];
   const im = imgs[key], c = document.createElement('canvas');
@@ -114,6 +136,10 @@ const sfx = {
   combo: (n: number) => tone(440 + n * 220, 660 + n * 330, 0.09, 'square', 0.05),
   skillReady: () => { tone(520, 780, 0.12, 'triangle', 0.08); setTimeout(() => tone(780, 1040, 0.12, 'triangle', 0.08), 110); },
   ready: () => tone(660, 990, 0.15, 'triangle', 0.08),
+  slash: () => { noise(0.25, 0.22, 3500); tone(900, 200, 0.28, 'sawtooth', 0.07); },
+  rise: () => { noise(0.5, 0.3, 500); tone(80, 40, 0.6, 'sawtooth', 0.12); },
+  snapWind: () => tone(300, 900, 0.3, 'triangle', 0.06),
+  snap: () => { tone(2200, 500, 0.06, 'square', 0.14); noise(0.35, 0.5, 1200); tone(100, 30, 0.35, 'sine', 0.35); },
 };
 
 
@@ -177,7 +203,7 @@ function musicUpdate(g: Game) {
   const live = (g.phase === 'intro' || g.phase === 'fight') && !muted;
   if (live && musicTimer === null) startMusic();
   else if (!live && musicTimer !== null) stopMusic(g.phase === 'ko' ? 0.15 : 0.6);
-  intense = g.f.some(f => f.hp < MAX_HP * 0.4);
+  intense = g.f.some(f => f.hp < f.maxHp * 0.4);
 }
 
 /* ============================ HELPERS ============================ */
@@ -186,19 +212,20 @@ const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 const rnd = (a: number, b: number) => a + Math.random() * (b - a);
 const easeOut = (t: number) => 1 - Math.pow(1 - clamp(t, 0, 1), 3);
 
-function mkFighter(id: 0 | 1, human: boolean, name: string, x: number, face: 1 | -1): Fighter {
+function mkFighter(id: 0 | 1, human: boolean, name: string, x: number, face: 1 | -1, char: Char): Fighter {
+  const maxHp = char === 'redla' ? REDLA_HP : MAX_HP;
   return {
-    id, human, name, x, y: REST_Y, vx: 0, vy: 0, kx: 0, face, hp: MAX_HP, hpTrail: MAX_HP, xp: 0,
+    id, human, name, char, maxHp, slashDone: false, x, y: REST_Y, vx: 0, vy: 0, kx: 0, face, hp: maxHp, hpTrail: maxHp, xp: 0,
     act: 'idle', t: 0, cd: 0, hitDone: false, stun: 0, flash: 0, tilt: 0, moving: false, inv: false, grace: 0, combo: 0, comboT: 0, fin: false,
     dashDir: 1, dashDest: 0, dashHit: false,
     ai: { think: 600, mode: 0, modeT: 0, dodgeX: null, dodgeAt: 0, skillAt: 0, inp: newInput() },
   };
 }
 
-export function createCombat(): Game {
+export function createCombat(pc: Char = 'asteron', oc: Char = 'asteron'): Game {
   return {
-    f: [mkFighter(0, true, 'YOU', 420, 1), mkFighter(1, false, 'OPPONENT', 1180, -1)],
-    time: 0, phase: 'intro', phaseT: 0, ults: [], booms: [], rings: [], parts: [], pops: [], ghosts: [],
+    f: [mkFighter(0, true, `YOU · ${CHAR_LABEL[pc]}`, 420, 1, pc), mkFighter(1, false, `OPPONENT · ${CHAR_LABEL[oc]}`, 1180, -1, oc)],
+    time: 0, phase: 'intro', phaseT: 0, ults: [], slashes: [], booms: [], rings: [], parts: [], pops: [], ghosts: [],
     shake: 0, whiteout: 0, winner: -1, reported: false, hint: null, slow: 1,
   };
 }
@@ -222,10 +249,11 @@ function damage(g: Game, att: Fighter, def: Fighter, kind: 'punch' | 'skill' | '
   }
   def.hp = Math.max(0, def.hp - amount);
   def.flash = 140;
+  const red = att.char === 'redla', accent = red ? '#ff6a3a' : '#7fd0ff';
   const hadSkill = att.xp >= XP_SKILL; att.xp = Math.min(XP_ULT, att.xp + (kind === 'punch' ? 8 : kind === 'skill' ? 10 : 0)); if (att.human && !hadSkill && att.xp >= XP_SKILL) sfx.skillReady();
   def.xp = Math.min(XP_ULT, def.xp + amount * 0.7);
-  g.pops.push({ x: def.x + rnd(-20, 20), y: def.y - FH * S + 10, text: String(Math.round(amount)), t: 0, color: kind === 'ult' ? '#ffd23f' : kind === 'skill' ? '#6fd3ff' : '#ffffff', big: kind !== 'punch' });
-  burst(g, def.x, def.y - 100, kind === 'punch' ? '#ffffff' : '#7fd0ff', kind === 'punch' ? 8 : 18, kind === 'punch' ? 5 : 9);
+  g.pops.push({ x: def.x + rnd(-20, 20), y: def.y - FH * S + 10, text: String(Math.round(amount)), t: 0, color: kind === 'ult' ? '#ffd23f' : kind === 'skill' ? (red ? '#ffa24a' : '#6fd3ff') : '#ffffff', big: kind !== 'punch' });
+  burst(g, def.x, def.y - 100, kind === 'punch' ? '#ffffff' : accent, kind === 'punch' ? 8 : 18, kind === 'punch' ? 5 : 9);
   g.shake = Math.max(g.shake, kind === 'punch' ? 5 : kind === 'skill' ? 12 : 30);
   sfx.hit();
   if (def.hp <= 0 && trade) {
@@ -250,6 +278,7 @@ function damage(g: Game, att: Fighter, def: Fighter, kind: 'punch' | 'skill' | '
   return true;
 }
 
+const punchMs = (f: Fighter) => (f.char === 'redla' ? R_PUNCH_MS : PUNCH_MS);
 function startPunch(f: Fighter) {
   f.act = 'punch'; f.t = 0; f.hitDone = false; f.vx = 0; sfx.whoosh();
   f.combo += 1; f.comboT = COMBO_WINDOW; if (f.human) sfx.combo(f.combo); f.fin = f.combo >= COMBO_MAX;
@@ -258,6 +287,12 @@ function startPunch(f: Fighter) {
 }
 
 function startSkill(g: Game, f: Fighter, o: Fighter) {
+  if (f.char === 'redla') {                       // sword skill: swing, then a fire slash flies out
+    f.xp -= XP_SKILL; f.act = 'sword'; f.t = 0; f.vx = 0; f.slashDone = false; f.face = (o.x >= f.x ? 1 : -1);
+    g.rings.push({ x: f.x, y: GROUND, t: 0, max: 450, color: '#ff6a2a' });
+    sfx.whoosh();
+    return;
+  }
   f.xp -= XP_SKILL; f.act = 'charge'; f.t = 0; f.vx = 0; f.inv = false;
   f.face = (o.x >= f.x ? 1 : -1);
   f.dashDir = f.face;
@@ -275,7 +310,14 @@ function beginDash(g: Game, f: Fighter, o: Fighter) {
 function startUlt(g: Game, f: Fighter, o: Fighter) {
   f.xp = 0; f.act = 'ult'; f.t = 0; f.vx = 0;
   const dir: 1 | -1 = f.face;
-  g.ults.push({ owner: f.id, t: 0, dir, cx0: dir > 0 ? -SHIP_W / 2 - 60 : W + SHIP_W / 2 + 60, tx: o.x, dropped: false, bomb: null, blasted: false, tBlast: 0, reacted: false });
+  if (f.char === 'redla') {                       // giant hand rises from the ground and walks to the target
+    const hx = clamp(f.x + dir * 200, 100, W - 100);
+    g.ults.push({ kind: 'hand', end: 7000, hx, snapT: -1, owner: f.id, t: 0, dir, cx0: 0, tx: hx, dropped: false, bomb: null, blasted: false, tBlast: 0, reacted: false });
+    g.rings.push({ x: hx, y: GROUND, t: 0, max: 600, color: '#ff4d2d' });
+    burst(g, hx, GROUND - 10, '#7a2a1a', 24, 9, 9); g.shake = Math.max(g.shake, 14); sfx.rise();
+    return;
+  }
+  g.ults.push({ kind: 'ship', end: T_END, hx: 0, snapT: -1, owner: f.id, t: 0, dir, cx0: dir > 0 ? -SHIP_W / 2 - 60 : W + SHIP_W / 2 + 60, tx: o.x, dropped: false, bomb: null, blasted: false, tBlast: 0, reacted: false });
   sfx.ship();
 }
 
@@ -376,10 +418,10 @@ function updateFighter(g: Game, f: Fighter, o: Fighter) {
   if (f.comboT > 0) { f.comboT -= DT; if (f.comboT <= 0) f.combo = 0; }
   switch (f.act) {
     case 'punch':
-      if (!f.hitDone && f.t >= PUNCH_HIT_AT) {
+      if (!f.hitDone && f.t >= (f.char === 'redla' ? R_HIT_AT : PUNCH_HIT_AT)) {
         f.hitDone = true;
         const dx = (o.x - f.x) * f.face;
-        if (dx > -30 && dx < REACH && Math.abs(o.y - f.y) < 170) {
+        if (dx > -30 && dx < (f.char === 'redla' && f.fin ? R_KICK_REACH : REACH) && Math.abs(o.y - f.y) < 170) {
           const finisher = f.fin;   // this is the 3rd punch of the combo
           if (damage(g, f, o, 'punch', DMG.punch, f.face) && finisher && o.act === 'hit') {
             o.kx = f.face * COMBO_KB; o.stun = COMBO_STUN;   // opponent flies back: walk forward again to punch
@@ -388,7 +430,15 @@ function updateFighter(g: Game, f: Fighter, o: Fighter) {
           }
         }
       }
-      if (f.t >= PUNCH_MS) { f.act = 'idle'; f.t = 0; }
+      if (f.t >= punchMs(f)) { f.act = 'idle'; f.t = 0; }
+      break;
+    case 'sword':
+      if (!f.slashDone && f.t >= SWORD_SPAWN) {
+        f.slashDone = true;
+        g.slashes.push({ owner: f.id, x: f.x + f.face * 110, y: GROUND - 125, dir: f.face, t: 0, hit: false });
+        burst(g, f.x + f.face * 100, GROUND - 125, '#ffb347', 14, 8); sfx.slash();
+      }
+      if (f.t >= SWORD_MS) { f.act = 'idle'; f.t = 0; }
       break;
     case 'charge':
       f.vy = 0; f.y = lerp(f.y, Math.min(f.y, REST_Y - 20), 0.1);
@@ -426,10 +476,33 @@ function updateFighter(g: Game, f: Fighter, o: Fighter) {
   f.tilt = lerp(f.tilt, target, 0.18);
 }
 
+function updateHand(g: Game, u: Ult, owner: Fighter, foe: Fighter) {
+  u.tx = u.hx;                                           // lets the AI judge which way to run
+  if (!u.dropped) {                                      // rising, then walking toward the target (idle pose)
+    if (owner.act === 'ko') { u.t = u.end + 1; return; }
+    if (u.t < HAND_RISE) return;
+    const dx = foe.x - u.hx; u.dir = dx >= 0 ? 1 : -1;
+    if (Math.abs(dx) > HAND_STOP) u.hx = clamp(u.hx + u.dir * Math.min(HAND_SPEED, Math.abs(dx) - HAND_STOP), 60, W - 60);
+    else { u.dropped = true; u.snapT = u.t; u.end = u.t + 9 * HAND_FRAME_MS + 450; sfx.snapWind(); }
+  } else if (!u.blasted && u.t >= u.snapT + HAND_HIT_AT) {   // the snap lands
+    u.blasted = true; u.tBlast = u.t;
+    const x = u.hx + u.dir * 40;
+    g.rings.push({ x, y: GROUND, t: 0, max: 650, color: '#ff8a3d' });
+    g.rings.push({ x, y: GROUND, t: -100, max: 850, color: '#ff3b2f' });
+    burst(g, x, GROUND - 60, '#ff5a2d', 30, 12, 8); burst(g, x, GROUND - 40, '#6b2a1c', 20, 9, 10);
+    g.shake = Math.max(g.shake, 34); sfx.snap();
+    const dx = foe.x - x;
+    if (Math.abs(dx) < HAND_R && foe.y > REST_Y - 140 && foe.act !== 'ko') {   // jump over it or dash through it to avoid
+      damage(g, owner, foe, 'ult', Math.round(DMG.ult * (1 - 0.3 * Math.abs(dx) / HAND_R)), dx >= 0 ? 1 : -1);
+    }
+  } else if (u.blasted && u.t >= u.tBlast + 350 && owner.act === 'ult') { owner.act = 'idle'; owner.t = 0; }
+}
+
 function updateUlts(g: Game) {
   for (const u of g.ults) {
     u.t += DT;
     const owner = g.f[u.owner], foe = g.f[1 - u.owner];
+    if (u.kind === 'hand') { updateHand(g, u, owner, foe); continue; }
     if (!u.dropped) {
       if (owner.act === 'ko') { u.t = T_END + 1; continue; }
       u.tx = clamp(foe.x, 100, W - 100);
@@ -448,7 +521,7 @@ function updateUlts(g: Game) {
       owner.act = 'idle'; owner.t = 0;
     }
   }
-  g.ults = g.ults.filter(u => u.t <= T_END);
+  g.ults = g.ults.filter(u => u.t <= u.end);
   for (const f of g.f) if (f.act === 'ult' && !g.ults.some(u => u.owner === f.id)) { f.act = 'idle'; f.t = 0; }
 }
 
@@ -465,6 +538,15 @@ export function stepCombat(g: Game, inp: Input) {
   applyInput(g, o, p, o.ai.inp);
   updateFighter(g, p, o); updateFighter(g, o, p);
   updateUlts(g);
+  for (const s of g.slashes) {
+    s.t += dt; s.x += s.dir * SLASH_V;
+    if (Math.random() < 0.8) g.parts.push({ x: s.x - s.dir * rnd(20, 90), y: s.y + rnd(-90, 90), vx: -s.dir * rnd(1, 4), vy: rnd(-2, 1), g: -0.05, life: 0, max: rnd(220, 420), color: ['#ffd23f', '#ff8a3d', '#ff4d2d'][Math.floor(Math.random() * 3)], size: rnd(5, 12) });
+    const foe = g.f[1 - s.owner];
+    if (!s.hit && foe.act !== 'ko' && Math.abs(s.x - foe.x) < SLASH_R && foe.y > REST_Y - 110 && damage(g, g.f[s.owner], foe, 'skill', DMG.skill, s.dir)) {
+      s.hit = true; burst(g, foe.x, GROUND - 120, '#ff8a3d', 26, 11, 8); g.rings.push({ x: foe.x, y: GROUND, t: 0, max: 400, color: '#ff6a2a' });
+    }
+  }
+  g.slashes = g.slashes.filter(s => !s.hit && s.x > -300 && s.x < W + 300);
   // both dash and cross paths: they simply hit each other (neither is invulnerable to the other's dash)
   if (p.act === 'dash' && o.act === 'dash' && p.dashDir !== o.dashDir && (p.x - o.x) * p.dashDir >= 0) {
     const pd = p.dashDir, od = o.dashDir;
@@ -582,14 +664,14 @@ function drawHud(ctx: CanvasRenderingContext2D, g: Game, f: Fighter, right: bool
   const ix = right ? W - pad - ICON : pad;
   const bx = right ? ix - 16 - BW : ix + ICON + 16;
   ctx.fillStyle = '#000'; ctx.fillRect(ix, y, ICON, ICON);                       // profile icon
-  if (imgs.profile.width) { ctx.imageSmoothingEnabled = true; ctx.drawImage(imgs.profile, ix, y, ICON, ICON); }
+  if (imgs.profile.width) { ctx.imageSmoothingEnabled = true; ctx.drawImage(f.char === 'redla' ? imgs.redlaIcon : imgs.profile, ix, y, ICON, ICON); }
   ctx.strokeStyle = f.human ? '#6aa8ff' : '#ff6a78'; ctx.lineWidth = 4; ctx.strokeRect(ix, y, ICON, ICON);
   ctx.font = 'bold 22px ui-monospace, Menlo, monospace'; ctx.textBaseline = 'alphabetic';
   ctx.fillStyle = '#fff'; ctx.textAlign = right ? 'right' : 'left';
   ctx.shadowColor = 'rgba(0,0,0,0.7)'; ctx.shadowBlur = 4;
   ctx.fillText(f.name, right ? bx + BW : bx, y + 20);
   ctx.shadowBlur = 0;
-  drawBar(ctx, bx, y + 28, BW, 30, f.hp / MAX_HP, f.hpTrail / MAX_HP, ['#ff7d89', '#d7263d'], '#3a0a12', '#8f1727', right);
+  drawBar(ctx, bx, y + 28, BW, 30, f.hp / f.maxHp, f.hpTrail / f.maxHp, ['#ff7d89', '#d7263d'], '#3a0a12', '#8f1727', right);
   ctx.font = 'bold 15px ui-monospace, Menlo, monospace'; ctx.fillStyle = '#fff';
   ctx.fillText(`HP ${Math.ceil(f.hp)}`, right ? bx + BW - 8 : bx + 8, y + 49);
   const full = f.xp >= XP_ULT - 0.01, half = f.xp >= XP_SKILL;
@@ -610,7 +692,83 @@ function drawHud(ctx: CanvasRenderingContext2D, g: Game, f: Fighter, right: bool
   }
 }
 
+function drawTag(ctx: CanvasRenderingContext2D, f: Fighter, h: number, bob: number) {
+  const ty = f.y - h - 14 + bob;
+  ctx.font = 'bold 18px ui-monospace, Menlo, monospace'; ctx.textAlign = 'center';
+  ctx.fillStyle = f.human ? '#8ec0ff' : '#ff8d99';
+  ctx.shadowColor = '#000'; ctx.shadowBlur = 4;
+  ctx.fillText(f.human ? 'YOU' : 'OPPONENT', f.x, ty - 10);
+  ctx.beginPath(); ctx.moveTo(f.x - 8, ty - 2); ctx.lineTo(f.x + 8, ty - 2); ctx.lineTo(f.x, ty + 8); ctx.fill();
+  ctx.shadowBlur = 0;
+}
+
+function drawRedla(ctx: CanvasRenderingContext2D, g: Game, f: Fighter) {
+  const e = f.face > 0 ? 'e' : 'w';
+  let sheet = 'idle', frame = 0;
+  if (f.act === 'punch') { sheet = f.fin ? 'kick' : 'cross'; const n = SHEETS[sheet].n; frame = Math.min(n - 1, Math.floor(f.t / (R_PUNCH_MS / n))); }
+  else if (f.act === 'sword') { sheet = 'sword'; frame = Math.min(11, Math.floor(f.t / (SWORD_MS / 12))); }
+  else if (f.act === 'ko') { sheet = 'die'; frame = Math.min(6, Math.floor(f.t / 90)); }
+  else if (f.act === 'hit' && f.stun >= 500) {
+    const p = f.t / f.stun;
+    if (p < 0.5) { sheet = 'die'; frame = Math.min(6, Math.floor(p * 14)); } else { sheet = 'up'; frame = Math.min(4, Math.floor((p - 0.5) * 10)); }
+  }
+  else if (f.y < REST_Y - 4) { sheet = 'jump'; frame = clamp(Math.floor((f.vy + JUMP_V) / (2 * JUMP_V) * 9), 0, 8); }
+  else if (f.act === 'idle' && f.moving) { sheet = 'run'; frame = Math.floor(g.time / 85) % 4; }
+  const key = `${sheet}_${e}`, im = imgs[key], sh = SHEETS[sheet];
+  if (!im || !im.width) return;
+  const dw = sh.fw * RS, dh = im.height * RS, dx = -dw / 2, dy = -sh.feet * RS;
+  ctx.save();
+  ctx.translate(f.x, f.y + 30);                       // feet touch the ground
+  if (f.act === 'sword' || f.act === 'ult') {
+    const gl = ctx.createRadialGradient(0, -110, 10, 0, -110, 190);
+    gl.addColorStop(0, 'rgba(255,90,40,0.55)'); gl.addColorStop(1, 'rgba(255,90,40,0)');
+    ctx.fillStyle = gl; ctx.fillRect(-200, -310, 400, 400);
+  }
+  if (f.act === 'hit' && f.stun < 500) ctx.rotate(-f.face * 0.12);
+  else if (f.act === 'idle' && f.moving) ctx.rotate(Math.sign(f.vx) * 0.05);
+  if (f.grace > 0) ctx.globalAlpha = 0.45 + 0.35 * Math.sin(g.time / 40);
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(im, frame * sh.fw, 0, sh.fw, im.height, dx, dy, dw, dh);
+  if (f.flash > 0) { ctx.globalAlpha = Math.min(1, f.flash / 100) * 0.9; ctx.drawImage(tint(key, '#ffffff'), frame * sh.fw, 0, sh.fw, im.height, dx, dy, dw, dh); }
+  ctx.restore();
+}
+
+function drawSlash(ctx: CanvasRenderingContext2D, s: Slash, time: number) {
+  ctx.save(); ctx.translate(s.x, s.y); ctx.scale(s.dir, 1);
+  const fl = 1 + Math.sin(time / 40) * 0.06;
+  ctx.shadowColor = '#ff6a1a'; ctx.shadowBlur = 40;
+  const cres = (cx: number, r: number, a: number, col0: string, col1: string, k: number) => {
+    const tx = cx + r * Math.cos(a), ty = r * Math.sin(a);
+    const cx2 = -120 * k, a2 = Math.atan2(ty, tx - cx2), r2 = Math.hypot(tx - cx2, ty);
+    const gr = ctx.createLinearGradient(-60, 0, cx + r, 0); gr.addColorStop(0, col0); gr.addColorStop(1, col1);
+    ctx.fillStyle = gr; ctx.beginPath(); ctx.arc(cx, 0, r, -a, a); ctx.arc(cx2, 0, r2, a2, -a2, true); ctx.closePath(); ctx.fill();
+  };
+  cres(-70, 130 * fl, 0.95, 'rgba(200,30,10,0.9)', '#ff9a2a', 1);
+  ctx.shadowBlur = 0;
+  cres(-60, 105 * fl, 0.85, 'rgba(255,150,40,0.9)', '#fff3b0', 0.9);
+  ctx.restore();
+}
+
+function drawHand(ctx: CanvasRenderingContext2D, u: Ult) {
+  const e = u.dir > 0 ? 'e' : 'w', snapping = u.dropped;
+  const sheet = snapping ? 'hand_snap' : 'hand_idle', sh = SHEETS[sheet], im = imgs[`${sheet}_${e}`];
+  if (!im || !im.width) return;
+  const frame = snapping ? Math.min(8, Math.floor((u.t - u.snapT) / HAND_FRAME_MS)) : 0;
+  const rise = easeOut(u.t / HAND_RISE), sink = snapping ? clamp((u.t - u.snapT - 9 * HAND_FRAME_MS) / 350, 0, 1) : 0;
+  const off = ((1 - rise) + sink) * 440, wob = snapping ? 0 : Math.sin(u.t / 120) * 3;
+  ctx.save(); ctx.beginPath(); ctx.rect(u.hx - 700, -500, 1400, GROUND + 14 + 500); ctx.clip();
+  ctx.translate(u.hx, GROUND + 10 + off + wob); ctx.imageSmoothingEnabled = false;
+  if (snapping && frame >= 4 && frame <= 5) { ctx.shadowColor = '#ff4d2d'; ctx.shadowBlur = 50; }
+  ctx.drawImage(im, frame * sh.fw, 0, sh.fw, im.height, -sh.fw * HS / 2, -sh.feet * HS, sh.fw * HS, im.height * HS);
+  ctx.restore();
+}
+
 function drawFighter(ctx: CanvasRenderingContext2D, g: Game, f: Fighter) {
+  if (f.char === 'redla') { drawRedla(ctx, g, f); if (f.act !== 'ko') drawTag(ctx, f, 215, 0); return; }
+  drawAsteron(ctx, g, f);
+}
+
+function drawAsteron(ctx: CanvasRenderingContext2D, g: Game, f: Fighter) {
   const east = f.face > 0;
   let key: 'idleE' | 'idleW' | 'punchE' | 'punchW' = east ? 'idleE' : 'idleW', frame = 0, sx = 1, sy = 1;
   const idleSpeed = f.moving ? 70 : 100;
@@ -645,15 +803,7 @@ function drawFighter(ctx: CanvasRenderingContext2D, g: Game, f: Fighter) {
   }
   ctx.globalAlpha = 1;
   ctx.restore();
-  if (f.act !== 'ko') {   // name tag
-    const ty = f.y - FH * S - 14 + bob;
-    ctx.font = 'bold 18px ui-monospace, Menlo, monospace'; ctx.textAlign = 'center';
-    ctx.fillStyle = f.human ? '#8ec0ff' : '#ff8d99';
-    ctx.shadowColor = '#000'; ctx.shadowBlur = 4;
-    ctx.fillText(f.human ? 'YOU' : 'OPPONENT', f.x, ty - 10);
-    ctx.beginPath(); ctx.moveTo(f.x - 8, ty - 2); ctx.lineTo(f.x + 8, ty - 2); ctx.lineTo(f.x, ty + 8); ctx.fill();
-    ctx.shadowBlur = 0;
-  }
+  if (f.act !== 'ko') drawTag(ctx, f, FH * S, bob);
   void air;
 }
 
@@ -719,12 +869,12 @@ export function renderCombat(ctx: CanvasRenderingContext2D, g: Game, cw: number,
   ctx.globalAlpha = 1;
   // sky dims while a ship is overhead
   let dim = 0;
-  for (const u of g.ults) dim = Math.max(dim, u.t < 500 ? u.t / 500 : u.t < T_LEAVE ? 1 : Math.max(0, 1 - (u.t - T_LEAVE) / 900));
+  for (const u of g.ults) if (u.kind === 'ship') dim = Math.max(dim, u.t < 500 ? u.t / 500 : u.t < T_LEAVE ? 1 : Math.max(0, 1 - (u.t - T_LEAVE) / 900));
   if (dim > 0) { ctx.fillStyle = `rgba(2,8,28,${0.4 * dim})`; ctx.fillRect(-BGX, -400, BGW, H + 800); }
   // ship(s) – huge, only the underside is visible
   const ship = imgs.ship;
   for (const u of g.ults) {
-    if (!ship.width) break;
+    if (u.kind !== 'ship' || !ship.width) continue;
     const cx = shipCx(u), h = SHIP_W * ship.height / ship.width;
     ctx.save(); ctx.translate(cx, SHIP_BOTTOM - h / 2);
     if (u.dir < 0) ctx.scale(-1, 1);
@@ -748,9 +898,11 @@ export function renderCombat(ctx: CanvasRenderingContext2D, g: Game, cw: number,
     ctx.restore();
   }
   ctx.globalAlpha = 1;
+  for (const u of g.ults) if (u.kind === 'hand') drawHand(ctx, u);
   // fighters (the one acting is drawn on top)
   const order = [...g.f].sort((a, b) => (a.act === 'idle' ? 0 : 1) - (b.act === 'idle' ? 0 : 1));
   for (const f of order) drawFighter(ctx, g, f);
+  for (const sl of g.slashes) drawSlash(ctx, sl, g.time);
   // bombs
   for (const u of g.ults) {
     if (!u.bomb || !imgs.bomb.width) continue;
