@@ -56,7 +56,7 @@ export interface Fighter {
   act: Action; t: number; cd: number; hitDone: boolean; stun: number; flash: number;
   tilt: number; moving: boolean; inv: boolean; grace: number; combo: number; comboT: number; fin: boolean;
   dashDir: 1 | -1; dashDest: number; dashHit: boolean;
-  ai: { think: number; mode: number; modeT: number; dodgeX: number | null; dodgeAt: number; skillAt: number; inp: Input };
+  ai: { save: number; think: number; mode: number; modeT: number; dodgeX: number | null; dodgeAt: number; skillAt: number; inp: Input };
 }
 interface Slash { owner: number; x: number; y: number; dir: 1 | -1; t: number; hit: boolean }
 interface Ult { kind: 'ship' | 'hand'; end: number; hx: number; snapT: number; owner: number; t: number; dir: 1 | -1; cx0: number; tx: number; dropped: boolean; bomb: { x: number; y: number; vy: number } | null; blasted: boolean; tBlast: number; reacted: boolean }
@@ -218,7 +218,7 @@ function mkFighter(id: 0 | 1, human: boolean, name: string, x: number, face: 1 |
     id, human, name, char, maxHp, slashDone: false, koLand: -1, x, y: REST_Y, vx: 0, vy: 0, kx: 0, face, hp: maxHp, hpTrail: maxHp, xp: 0,
     act: 'idle', t: 0, cd: 0, hitDone: false, stun: 0, flash: 0, tilt: 0, moving: false, inv: false, grace: 0, combo: 0, comboT: 0, fin: false,
     dashDir: 1, dashDest: 0, dashHit: false,
-    ai: { think: 600, mode: 0, modeT: 0, dodgeX: null, dodgeAt: 0, skillAt: 0, inp: newInput() },
+    ai: { save: 0, think: 600, mode: 0, modeT: 0, dodgeX: null, dodgeAt: 0, skillAt: 0, inp: newInput() },
   };
 }
 
@@ -408,8 +408,10 @@ function aiControl(g: Game, f: Fighter, o: Fighter) {
     else if (dist > 340) { inp.right = toward; inp.left = !toward; }
   } else { if (dist < 320) { inp.right = !toward; inp.left = toward; } }
   if (f.act !== 'idle') return;
+  // at 50% XP the bot either saves for its ultimate (60%) or spends it on a skill (40%); before this it always burned XP on skills and never reached 100
+  if (f.xp < XP_SKILL) a.save = 0; else if (a.save === 0) a.save = Math.random() < 0.6 ? 1 : 2;
   if (f.xp >= XP_ULT - 0.01 && g.ults.every(u => u.owner !== f.id) && Math.random() < 0.55) { inp.ult = 6; return; }
-  if (f.xp >= XP_SKILL && dist < 520 && Math.random() < (f.xp >= 90 ? 0.1 : 0.25)) { inp.skill = 6; return; }
+  if (f.xp >= XP_SKILL && a.save === 2 && dist < 520 && Math.random() < 0.25) { inp.skill = 6; return; }
   if (dist < REACH - 10 && f.cd <= 0 && Math.random() < 0.55) inp.punch = 6;
   if (Math.random() < 0.035) inp.jump = 4;
 }
