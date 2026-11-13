@@ -50,7 +50,7 @@ export interface Input { left: boolean; right: boolean; jump: number; punch: num
 export const newInput = (): Input => ({ left: false, right: false, jump: 0, punch: 0, skill: 0, ult: 0 });
 
 export interface Fighter {
-  id: 0 | 1; human: boolean; name: string; char: Char; maxHp: number; slashDone: boolean;
+  id: 0 | 1; human: boolean; name: string; char: Char; maxHp: number; slashDone: boolean; koLand: number;
   x: number; y: number; vx: number; vy: number; kx: number;
   face: 1 | -1; hp: number; hpTrail: number; xp: number;
   act: Action; t: number; cd: number; hitDone: boolean; stun: number; flash: number;
@@ -215,7 +215,7 @@ const easeOut = (t: number) => 1 - Math.pow(1 - clamp(t, 0, 1), 3);
 function mkFighter(id: 0 | 1, human: boolean, name: string, x: number, face: 1 | -1, char: Char): Fighter {
   const maxHp = char === 'redla' ? REDLA_HP : MAX_HP;
   return {
-    id, human, name, char, maxHp, slashDone: false, x, y: REST_Y, vx: 0, vy: 0, kx: 0, face, hp: maxHp, hpTrail: maxHp, xp: 0,
+    id, human, name, char, maxHp, slashDone: false, koLand: -1, x, y: REST_Y, vx: 0, vy: 0, kx: 0, face, hp: maxHp, hpTrail: maxHp, xp: 0,
     act: 'idle', t: 0, cd: 0, hitDone: false, stun: 0, flash: 0, tilt: 0, moving: false, inv: false, grace: 0, combo: 0, comboT: 0, fin: false,
     dashDir: 1, dashDest: 0, dashHit: false,
     ai: { think: 600, mode: 0, modeT: 0, dodgeX: null, dodgeAt: 0, skillAt: 0, inp: newInput() },
@@ -238,6 +238,7 @@ function burst(g: Game, x: number, y: number, color: string, n: number, speed: n
 }
 
 /* ============================ COMBAT ACTIONS ============================ */
+const koFall = (d: Fighter) => { d.vy = d.char === 'redla' ? 0 : -11; d.koLand = d.y >= REST_Y - 1 ? 0 : -1; };   // Redla just drops; Asteron hops back
 function damage(g: Game, att: Fighter, def: Fighter, kind: 'punch' | 'skill' | 'ult', amount: number, dir: number): boolean {
   if (def.act === 'ko') return false;
   // two bombs landing within half a second of each other can KO both fighters -> double KO
@@ -257,12 +258,12 @@ function damage(g: Game, att: Fighter, def: Fighter, kind: 'punch' | 'skill' | '
   g.shake = Math.max(g.shake, kind === 'punch' ? 5 : kind === 'skill' ? 12 : 30);
   sfx.hit();
   if (def.hp <= 0 && trade) {
-    def.act = 'ko'; def.t = 0; def.kx = dir * 16; def.vy = -11; g.winner = -1; g.shake = 40;
+    def.act = 'ko'; def.t = 0; def.kx = dir * 16; koFall(def); g.winner = -1; g.shake = 40;
     g.pops.push({ x: W / 2, y: 250, text: 'DOUBLE K.O.!', t: 0, color: '#ffd23f', big: true });
     return true;
   }
   if (def.hp <= 0) {
-    def.act = 'ko'; def.t = 0; def.kx = dir * 16; def.vy = -11; def.inv = false;
+    def.act = 'ko'; def.t = 0; def.kx = dir * 16; koFall(def); def.inv = false;
     g.phase = 'ko'; g.phaseT = 0; g.winner = att.id; g.shake = 26; g.slow = 0.35;
     g.ults = g.ults.filter(u => u.owner !== def.id || u.dropped);
     sfx.ko();
@@ -468,7 +469,7 @@ function updateFighter(g: Game, f: Fighter, o: Fighter) {
   }
   // physics
   if (f.act !== 'dash' && f.act !== 'charge') {
-    if (f.y < REST_Y || f.vy < 0) { f.vy += GRAV; f.y += f.vy; if (f.y >= REST_Y) { f.y = REST_Y; if (f.vy > 8) sfx.land(); f.vy = 0; } }
+    if (f.y < REST_Y || f.vy < 0) { f.vy += GRAV; f.y += f.vy; if (f.y >= REST_Y) { f.y = REST_Y; if (f.vy > 8) sfx.land(); f.vy = 0; if (f.act === 'ko' && f.koLand < 0) f.koLand = f.t; } }
   }
   if (f.act !== 'dash') { f.x += f.vx + f.kx; f.kx *= 0.86; if (Math.abs(f.kx) < 0.1) f.kx = 0; }
   f.x = clamp(f.x, 80, W - 80);
@@ -715,7 +716,7 @@ function drawRedla(ctx: CanvasRenderingContext2D, g: Game, f: Fighter) {
   let sheet = 'idle', frame = 0;
   if (f.act === 'punch') { sheet = f.fin ? 'kick' : 'cross'; const n = SHEETS[sheet].n; frame = Math.min(n - 1, Math.floor(f.t / (R_PUNCH_MS / n))); }
   else if (f.act === 'sword') { sheet = 'sword'; frame = Math.min(11, Math.floor(f.t / (SWORD_MS / 12))); }
-  else if (f.act === 'ko') { sheet = 'die'; frame = Math.min(6, Math.floor(f.t / 90)); }
+  else if (f.act === 'ko') { sheet = 'die'; frame = f.koLand < 0 ? 0 : Math.min(6, Math.floor((f.t - f.koLand) / 90)); }   // falling animation starts once he's on the ground
   else if (f.act === 'hit' && f.stun >= 500) {
     const p = f.t / f.stun;
     if (p < 0.5) { sheet = 'die'; frame = Math.min(6, Math.floor(p * 14)); } else { sheet = 'up'; frame = Math.min(4, Math.floor((p - 0.5) * 10)); }
@@ -788,7 +789,8 @@ function drawAsteron(ctx: CanvasRenderingContext2D, g: Game, f: Fighter) {
   const strip = imgs[key]; if (!strip.width) return;
   const air = REST_Y - f.y;
   const bob = f.act === 'ko' ? 0 : Math.sin(g.time / (f.moving ? 150 : 250) + f.id * 2) * (f.moving ? 4 : 8);
-  const cy = f.y + bob - (FH * S) / 2;
+  const sink = f.act === 'ko' ? 92 * Math.min(1, f.t * 0.0035 / 1.45) : 0;   // lie on the floor, not hover above it
+  const cy = f.y + bob - (FH * S) / 2 + sink;
   ctx.save();
   ctx.translate(f.x, cy);
   let rot = f.tilt;
